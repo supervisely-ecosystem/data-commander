@@ -650,14 +650,14 @@ def copy_or_move(state: Dict, move: bool = False):
                     sly.logger.error("Failed to merge project meta", exc_info=True)
                     progress.current += src_project_info.items_count
                     continue
-                if dst_dataset_id is None:
-                    created_dataset_info = api.dataset.create(
-                        _dst_project_id,
-                        name=src_project_info.name,
-                        description=src_project_info.description,
-                        change_name_if_conflict=True,
-                    )
-                    _dst_dataset_id = created_dataset_info.id
+                created_dataset_info = api.dataset.create(
+                    _dst_project_id,
+                    name=src_project_info.name,
+                    description=src_project_info.description,
+                    change_name_if_conflict=True,
+                    parent_id=dst_dataset_id,
+                )
+                _dst_dataset_id = created_dataset_info.id
 
             with sly.ApiContext(api, project_meta=project_meta):
                 with ThreadPoolExecutor(len(src_datasets_tree)) as ds_executor:
