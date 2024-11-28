@@ -490,6 +490,12 @@ def create_project(
     src_project_id: int, dst_workspace_id: int, project_type: str, options: Dict
 ) -> sly.ProjectInfo:
     project_info = api.project.get_info_by_id(src_project_id, raise_error=True)
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        existing = api.project.get_list(dst_workspace_id)
+        if project_info.name in [pr.name for pr in existing]:
+            raise ValueError(
+                "Project with the same name already exists and conflict resolution mode is set to 'skip'"
+            )
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_info.id))
     created_at = None
     created_by = None
@@ -604,9 +610,10 @@ def copy_or_move(state: Dict, move: bool = False):
 
     items_to_create = 0
     created_datasets = []
+    items_project_infos = []
+    created_project_infos = []
     item_type = items[0][JSONKEYS.TYPE]
     if item_type == JSONKEYS.PROJECT:
-        items_project_infos = []
         for item in items:
             src_project_id = item[JSONKEYS.ID]
             src_project_info = api.project.get_info_by_id(src_project_id)
@@ -624,10 +631,18 @@ def copy_or_move(state: Dict, move: bool = False):
             _dst_dataset_id = dst_dataset_id
             if dst_project_id is None:
                 # copy project to workspace
-                created_project_info, project_meta = create_project(
-                    src_project_id, dst_workspace_id, project_type, options
-                )
-                _dst_project_id = created_project_info.id
+                try:
+                    created_project_info, project_meta = create_project(
+                        src_project_id, dst_workspace_id, project_type, options
+                    )
+                    _dst_project_id = created_project_info.id
+                except ValueError as e:
+                    sly.logger.error("Failed to create project", exc_info=True)
+                    progress.current += src_project_info.items_count
+                    created_project_infos.append(None)
+                    continue
+                else:
+                    created_project_infos.append(created_project_info)
             else:
                 try:
                     project_meta = merge_project_meta(src_project_id, dst_project_id)
@@ -663,7 +678,6 @@ def copy_or_move(state: Dict, move: bool = False):
                         )
                     for task in as_completed(tasks):
                         created_datasets.extend(task.result())
-
     elif item_type == JSONKEYS.DATASET:
         if dst_project_id is None:
             raise ValueError(
@@ -701,9 +715,6 @@ def copy_or_move(state: Dict, move: bool = False):
     else:
         raise ValueError(f"Unsupported item type: {item_type}")
 
-    if not move:
-        return
-
     # validate before deleting the source
     created_items_n = sum(
         0 if dataset is None else dataset.items_count for dataset in created_datasets
@@ -716,6 +727,21 @@ def copy_or_move(state: Dict, move: bool = False):
         created_items_n,
         sum(1 for ds in created_datasets if ds is not None),
     )
+
+    if (
+        options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE
+        and len(created_project_infos) > 0
+    ):
+        existing = api.project.get_list(dst_workspace_id)
+        for src, created in zip(items_project_infos, created_project_infos):
+            if created is None:
+                continue
+            if src.name in [pr.name for pr in existing]:
+                api.project.remove(src.id)
+                api.project.update(created.id, name=src.name)
+
+    if not move:
+        return
 
     sly.logger.info("Deleting source items")
     # delete
@@ -734,9 +760,8 @@ def copy_or_move(state: Dict, move: bool = False):
             all_datasets = api.dataset.get_list(dst_project_id, recursive=True)
             dst_dataset_info = [ds for ds in all_datasets if ds.id == dst_dataset_id][0]
             dst_parents = _get_all_parents(dst_dataset_info, all_datasets)
-            if (
-                dst_dataset_id in src_dataset_ids
-                or any(ds.id in src_dataset_ids for ds in dst_parents)
+            if dst_dataset_id in src_dataset_ids or any(
+                ds.id in src_dataset_ids for ds in dst_parents
             ):
                 sly.logger.warning(
                     "Moving dataset to itself. Skipping deletion",
