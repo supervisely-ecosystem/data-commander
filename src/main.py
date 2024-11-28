@@ -452,8 +452,8 @@ def create_dataset_recursively(
                     created_info = api.dataset.update(
                         created_id, dataset_info.name, dataset_info.description
                     )
-            else:  # to update items count
-                created_info = api.dataset.get_info_by_id(created_id)
+            # to update items count
+            created_info = api.dataset.get_info_by_id(created_id)
             sly.logger.info(
                 "Created Dataset",
                 extra={
@@ -640,7 +640,7 @@ def copy_or_move(state: Dict, move: bool = False):
                     sly.logger.error("Failed to create project", exc_info=True)
                     progress.current += src_project_info.items_count
                     created_project_infos.append(None)
-                    continue
+                    continue  # TODO: update to_create
                 else:
                     created_project_infos.append(created_project_info)
             else:
