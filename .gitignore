@@ -1,0 +1,5 @@
+*.pyc
+ignored.txt
+venv
+.venv
+supervisely

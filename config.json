@@ -1,0 +1,9 @@
+{
+    "version": "2.0.0",
+    "name": "Data Commander",
+    "description": "",
+    "headless": true,
+    "main_script": "src/main.py",
+    "docker_image": "supervisely/sdk-test",
+    "instance_version": "6.12.10"
+}

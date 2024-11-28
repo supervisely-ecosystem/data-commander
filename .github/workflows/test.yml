@@ -1,0 +1,25 @@
+name: build-push-release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Echo ${{ github.event.release.tag_name }}
+        run: echo ${{ github.event.release.tag_name }}
+
+      - name: Write version to ENV variable
+        run: |
+            TAG_NAME=${{ github.event.release.tag_name }}
+            echo "LABEL_VERSION=${TAG_NAME:1}" >> $GITHUB_ENV
+      
+      - name: Echo ${{ env.LABEL_VERSION }}
+        run:
+            echo ${{ env.LABEL_VERSION }}
