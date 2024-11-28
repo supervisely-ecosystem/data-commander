@@ -2,6 +2,7 @@
     "version": "2.0.0",
     "name": "Data Commander",
     "description": "",
+    "type": "app",
     "headless": true,
     "main_script": "src/main.py",
     "docker_image": "supervisely/sdk-test",
