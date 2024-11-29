@@ -96,10 +96,12 @@ def clone_images_with_annotations(
     copy_imgs_task = executor.submit(_copy_imgs)
     download_anns_tasks = []
 
+    sly.logger.info("clone annotations: %s", options[JSONKEYS.CLONE_ANNOTATIONS] == True)
     if not options[JSONKEYS.CLONE_ANNOTATIONS]:
         dst_image_infos = copy_imgs_task.result()
         if progress_cb is not None:
             progress_cb(len(dst_image_infos))
+        sly.logger.info("Clone annotations is disabled")
         return dst_image_infos
 
     for batch in sly.batched(image_infos):
