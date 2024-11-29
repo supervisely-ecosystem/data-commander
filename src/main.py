@@ -684,7 +684,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 "Destination project is not specified. Cannot copy dataset to a workspace or team"
             )
         src_project_info = api.project.get_info_by_id(src_project_id)
-        project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id))
+        project_meta = merge_project_meta(src_project_id, dst_project_id)
         project_type = src_project_info.type
         src_dataset_ids = [item[JSONKEYS.ID] for item in items]
         src_datasets_tree = api.dataset.get_tree(src_project_id)
@@ -785,4 +785,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sly.main_wrapper("Data Commander", main)
