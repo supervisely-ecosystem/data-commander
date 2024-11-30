@@ -419,7 +419,7 @@ def create_dataset_recursively(
         },
     )
     tasks_queue = Queue()
-    local_executor = ThreadPoolExecutor()
+    local_executor = ThreadPoolExecutor(5)
 
     def _create_rec(
         dataset_info: sly.DatasetInfo, children: Dict[sly.DatasetInfo, Dict], dst_parent_id: int
@@ -508,6 +508,9 @@ def create_project(
         project_info.name,
         type=project_type,
         description=project_info.description,
+        settings=project_info.settings,
+        custom_data=project_info.custom_data,
+        readme=project_info.readme,
         change_name_if_conflict=True,
         created_at=created_at,
         created_by=created_by,
@@ -660,7 +663,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 _dst_dataset_id = created_dataset_info.id
 
             with sly.ApiContext(api, project_meta=project_meta):
-                with ThreadPoolExecutor(len(src_datasets_tree)) as ds_executor:
+                with ThreadPoolExecutor(5) as ds_executor:
                     tasks = []
                     for dataset, children in src_datasets_tree.items():
                         tasks.append(
@@ -694,7 +697,7 @@ def copy_or_move(state: Dict, move: bool = False):
         progress.total = items_to_create
         sly.logger.info("Items to create: %d", items_to_create)
         with sly.ApiContext(api, project_meta=project_meta):
-            with ThreadPoolExecutor(len(src_datasets_tree)) as ds_executor:
+            with ThreadPoolExecutor(5) as ds_executor:
                 tasks = []
                 for dataset, children in src_datasets_tree.items():
                     tasks.append(
