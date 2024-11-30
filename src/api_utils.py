@@ -1,3 +1,4 @@
+from ast import Dict
 from typing import Optional
 import pandas as pd
 import supervisely as sly
@@ -10,6 +11,9 @@ def create_project(
     name: str,
     type: sly.ProjectType = sly.ProjectType.IMAGES,
     description: Optional[str] = "",
+    settings: Dict = None,
+    custom_data: Dict = None,
+    readme: str = None,
     change_name_if_conflict: Optional[bool] = False,
     created_at: Optional[str] = None,
     created_by: Optional[str] = None,
@@ -26,6 +30,12 @@ def create_project(
         ApiField.DESCRIPTION: description,
         ApiField.TYPE: str(type),
     }
+    if settings is not None:
+        data[ApiField.SETTINGS] = settings
+    if custom_data is not None:
+        data[ApiField.CUSTOM_DATA] = custom_data
+    if readme is not None:
+        data[ApiField.README] = readme
     if created_at is not None:
         data[ApiField.CREATED_AT] = created_at
     if created_by is not None:
