@@ -455,6 +455,7 @@ def create_dataset_recursively(
                     existing = api.dataset.get_info_by_name(
                         dst_project_id, name=dataset_info.name, parent_id=dst_dataset_id
                     )
+                    api.dataset.update(existing.id, existing.name + "__to_remove")
                     api.dataset.remove(existing.id)
                     created_info = api.dataset.update(
                         created_id, dataset_info.name, dataset_info.description
@@ -748,6 +749,7 @@ def copy_or_move(state: Dict, move: bool = False):
             if created is None:
                 continue
             if src.name in [pr.name for pr in existing]:
+                api.project.update(src.id, name=src.name + "__to_remove")
                 api.project.remove(src.id)
                 api.project.update(created.id, name=src.name)
 
