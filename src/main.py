@@ -746,6 +746,7 @@ def copy_or_move(state: Dict, move: bool = False):
             if created is None:
                 continue
             if src.name in [pr.name for pr in existing]:
+                api.project.update(src.id, name=src.name + "__to_remove")
                 api.project.remove(src.id)
                 api.project.update(created.id, name=src.name)
 
