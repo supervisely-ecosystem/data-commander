@@ -433,13 +433,16 @@ def create_dataset_recursively(
                 existing = api.dataset.get_list(dst_project_id, parent_id=dst_dataset_id)
                 if any(ds.name == dataset_info.name for ds in existing):
                     return
-            created_info = api.dataset.create(
+            create_task = executor.submit(
+                api.dataset.create,
                 dst_project_id,
                 dataset_info.name,
                 dataset_info.description,
                 change_name_if_conflict=True,
                 parent_id=dst_parent_id,
             )
+            created_info = create_task.result()
+
             created_id = created_info.id
             if should_clone_items:
                 clone_items(
@@ -455,7 +458,8 @@ def create_dataset_recursively(
                         created_id, dataset_info.name, dataset_info.description
                     )
             # to update items count
-            created_info = api.dataset.get_info_by_id(created_id)
+            get_info_task = executor.submit(api.dataset.get_info_by_id, created_id)
+            created_info = get_info_task.result()
             sly.logger.info(
                 "Created Dataset",
                 extra={
