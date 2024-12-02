@@ -59,6 +59,8 @@ def extract_state_from_env():
             part = parts.pop(0)
             if value[0] == "[" or value.isdigit():
                 state_part[part] = ast.literal_eval(value)
+            elif value in ["True", "true", "False", "false"]:
+                state_part[part] = value in ["True", "true"]
             else:
                 state_part[part] = value
     return state
