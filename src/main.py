@@ -2,7 +2,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from queue import Queue
 import os
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 
 import supervisely as sly
@@ -21,6 +21,8 @@ UPLOAD_IMAGES_BATCH_SIZE = 1000
 
 class JSONKEYS:
     ACTION = "action"
+    ACTION_COPY = "copy"
+    ACTION_MOVE = "move"
     SOURCE = "source"
     DESTINATION = "destination"
     OPTIONS = "options"
@@ -423,7 +425,7 @@ def create_dataset_recursively(
         },
     )
     tasks_queue = Queue()
-    local_executor = ThreadPoolExecutor(5)
+    local_executor = ThreadPoolExecutor()
 
     def _create_rec(
         dataset_info: sly.DatasetInfo, children: Dict[sly.DatasetInfo, Dict], dst_parent_id: int
@@ -432,10 +434,12 @@ def create_dataset_recursively(
         created_info = None
         if dataset_info is not None:
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-                existing = api.dataset.get_list(dst_project_id, parent_id=dst_dataset_id)
+                existing = run_in_executor(
+                    api.dataset.get_list, dst_project_id, parent_id=dst_dataset_id
+                )
                 if any(ds.name == dataset_info.name for ds in existing):
                     return
-            create_task = executor.submit(
+            created_info = run_in_executor(
                 api.dataset.create,
                 dst_project_id,
                 dataset_info.name,
@@ -443,7 +447,6 @@ def create_dataset_recursively(
                 change_name_if_conflict=True,
                 parent_id=dst_parent_id,
             )
-            created_info = create_task.result()
 
             created_id = created_info.id
             if should_clone_items:
@@ -452,17 +455,15 @@ def create_dataset_recursively(
                 )
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                 if created_info.name != dataset_info.name:
-                    existing = api.dataset.get_info_by_name(
-                        dst_project_id, name=dataset_info.name, parent_id=dst_dataset_id
+                    existing = run_in_executor(
+                        api.dataset.get_info_by_name,
+                        dst_project_id,
+                        name=dataset_info.name,
+                        parent_id=dst_dataset_id,
                     )
-                    api.dataset.update(existing.id, existing.name + "__to_remove")
-                    api.dataset.remove(existing.id)
-                    created_info = api.dataset.update(
-                        created_id, dataset_info.name, dataset_info.description
-                    )
+                    created_info = replace_dataset(existing, dataset_info)
             # to update items count
-            get_info_task = executor.submit(api.dataset.get_info_by_id, created_id)
-            created_info = get_info_task.result()
+            created_info = run_in_executor(api.dataset.get_info_by_id, created_id)
             sly.logger.info(
                 "Created Dataset",
                 extra={
@@ -496,40 +497,31 @@ def create_dataset_recursively(
 
 
 def create_project(
-    src_project_id: int, dst_workspace_id: int, project_type: str, options: Dict
-) -> sly.ProjectInfo:
-    project_info = api.project.get_info_by_id(src_project_id, raise_error=True)
-    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        existing = api.project.get_list(dst_workspace_id)
-        if project_info.name in [pr.name for pr in existing]:
-            raise ValueError(
-                "Project with the same name already exists and conflict resolution mode is set to 'skip'"
-            )
-    project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_info.id))
+    src_project_info: sly.ProjectInfo, dst_workspace_id: int, project_type: str, options: Dict
+) -> Tuple[sly.ProjectInfo, sly.ProjectMeta]:
     created_at = None
     created_by = None
     if options.get(JSONKEYS.PRESERVE_SRC_DATE, False):
-        created_at = project_info.created_at
-        created_by = project_info.created_by_id
+        created_at = src_project_info.created_at
+        created_by = src_project_info.created_by_id
     dst_project_info = api_utils.create_project(
         api,
         dst_workspace_id,
-        project_info.name,
+        src_project_info.name,
         type=project_type,
-        description=project_info.description,
-        settings=project_info.settings,
-        custom_data=project_info.custom_data,
-        readme=project_info.readme,
+        description=src_project_info.description,
+        settings=src_project_info.settings,
+        custom_data=src_project_info.custom_data,
+        readme=src_project_info.readme,
         change_name_if_conflict=True,
         created_at=created_at,
         created_by=created_by,
     )
-    created_project_meta = api.project.update_meta(dst_project_info.id, project_meta)
     sly.logger.info(
         "Created project",
         extra={"project_id": dst_project_info.id, "project_name": dst_project_info.name},
     )
-    return dst_project_info, created_project_meta
+    return dst_project_info
 
 
 def merge_project_meta(src_project_id, dst_project_id):
@@ -590,8 +582,384 @@ def _get_all_parents(dataset: sly.DatasetInfo, dataset_infos: List[sly.DatasetIn
     return []
 
 
-def move_project(src_project_id: int, dst_workspace_id: int):
-    api.project.move(src_project_id, dst_workspace_id)
+def flatten_tree(tree: Dict):
+    result = []
+
+    def _dfs(tree: Dict):
+        for ds, children in tree.items():
+            result.append(ds)
+            _dfs(children)
+
+    _dfs(tree)
+    return result
+
+
+def find_children_in_tree(tree: Dict, parent_id: int):
+    return [ds for ds in flatten_tree(tree) if ds.parent_id == parent_id]
+
+
+def replace_project(src_project_info: sly.ProjectInfo, dst_project_info: sly.ProjectInfo):
+    """Remove src_rpoject_info and change name of dst_project_info to src_project_info.name"""
+    api.project.update(src_project_info.id, name=src_project_info.name + "__to_remove")
+    api.project.remove(src_project_info.id)
+    return api.project.update(dst_project_info.id, name=src_project_info.name)
+
+
+def replace_dataset(src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.DatasetInfo):
+    """Remove src_dataset_info and change name of dst_dataset_info to src_dataset_info.name"""
+    api.dataset.update(src_dataset_info.id, name=src_dataset_info.name + "__to_remove")
+    api.dataset.remove(src_dataset_info.id)
+    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name)
+
+
+def run_in_executor(func, *args, **kwargs):
+    return executor.submit(func, *args, **kwargs).result()
+
+
+def copy_project_with_replace(
+    src_project_info: sly.ProjectInfo,
+    dst_workspace_id: int,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+    existing_projects=None,
+    datasets_tree=None,
+):
+    if dst_project_id is None and dst_workspace_id == src_project_info.workspace_id:
+        sly.logger.warning(
+            "Copying project to the same workspace with replace. Skipping",
+            extra={"project_id": src_project_info.id},
+        )
+        progress_cb(src_project_info.items_count)
+        return []
+    project_type = src_project_info.type
+    created_datasets = []
+    if datasets_tree is None:
+        datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+    if dst_project_id is not None:
+        # copy project to existing project or existing dataset
+        project_meta = merge_project_meta(src_project_info.id, dst_project_id)
+        created_dataset = run_in_executor(
+            api.dataset.create,
+            dst_project_id,
+            src_project_info.name,
+            src_project_info.description,
+            change_name_if_conflict=True,
+            parent_id=dst_dataset_id,
+        )
+        existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=dst_project_id,
+                    dst_dataset_id=created_dataset.id,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+        if src_project_info.name in [ds.name for ds in existing_datasets]:
+            existing = [ds for ds in existing_datasets if ds.name == src_project_info.name][0]
+            run_in_executor(replace_dataset, existing, created_dataset)
+    else:
+        if existing_projects is None:
+            existing_projects = run_in_executor(api.project.get_list, dst_workspace_id)
+        created_project = run_in_executor(
+            create_project,
+            src_project_info,
+            dst_workspace_id,
+            project_type=project_type,
+            options=options,
+        )
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = sly.ProjectMeta.from_json(project_meta)
+        run_in_executor(api.project.update_meta, created_project.id, project_meta)
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=created_project.id,
+                    dst_dataset_id=None,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+        if src_project_info.name in [pr.name for pr in existing_projects]:
+            existing = [pr for pr in existing_projects if pr.name == src_project_info.name][0]
+            sly.logger.info(
+                "Replacing project",
+                extra={"existing_project_id": existing.id, "new_project_id": created_project.id},
+            )
+            run_in_executor(replace_project, existing, created_project)
+    return created_datasets
+
+
+def copy_project_with_skip(
+    src_project_info: sly.ProjectInfo,
+    dst_workspace_id: int,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+    existing_projects=None,
+    datasets_tree=None,
+):
+    project_type = src_project_info.type
+    created_datasets = []
+    if dst_project_id is not None:
+        if datasets_tree is None:
+            datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+        existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
+        if src_project_info.name in [ds.name for ds in existing_datasets]:
+            progress_cb(src_project_info.items_count)
+            sly.logger.info("Dataset with the same name already exists. Skipping")
+            return []
+        project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        created_dataset = run_in_executor(
+            api.dataset.create,
+            dst_project_id,
+            src_project_info.name,
+            src_project_info.description,
+            change_name_if_conflict=True,
+            parent_id=dst_dataset_id,
+        )
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=dst_project_id,
+                    dst_dataset_id=created_dataset.id,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+    else:
+        if src_project_info.name in [pr.name for pr in existing_projects]:
+            progress_cb(src_project_info.items_count)
+            sly.logger.info("Project with the same name already exists. Skipping")
+            return []
+        created_project = run_in_executor(
+            create_project,
+            src_project_info,
+            dst_workspace_id,
+            project_type=project_type,
+            options=options,
+        )
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = sly.ProjectMeta.from_json(project_meta)
+        run_in_executor(api.project.update_meta, created_project.id, project_meta)
+        if datasets_tree is None:
+            datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=created_project.id,
+                    dst_dataset_id=None,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+    return created_datasets
+
+
+def copy_project(
+    src_project_info: sly.ProjectInfo,
+    dst_workspace_id: int,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+    existing_projects=None,
+    datasets_tree=None,
+):
+    if datasets_tree is None:
+        datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+        return copy_project_with_replace(
+            src_project_info,
+            dst_workspace_id,
+            dst_project_id,
+            dst_dataset_id,
+            options,
+            progress_cb,
+            existing_projects,
+            datasets_tree,
+        )
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        return copy_project_with_skip(
+            src_project_info,
+            dst_workspace_id,
+            dst_project_id,
+            dst_dataset_id,
+            options,
+            progress_cb,
+            existing_projects,
+            datasets_tree,
+        )
+    project_type = src_project_info.type
+    created_datasets = []
+    if dst_project_id is not None:
+        project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        created_dataset = run_in_executor(
+            api.dataset.create,
+            dst_project_id,
+            src_project_info.name,
+            src_project_info.description,
+            change_name_if_conflict=True,
+            parent_id=dst_dataset_id,
+        )
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=dst_project_id,
+                    dst_dataset_id=created_dataset.id,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+    else:
+        created_project = run_in_executor(
+            create_project,
+            src_project_info,
+            dst_workspace_id,
+            project_type=project_type,
+            options=options,
+        )
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = sly.ProjectMeta.from_json(project_meta)
+        run_in_executor(api.project.update_meta, created_project.id, project_meta)
+        datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+        for ds, children in datasets_tree.items():
+            created_datasets.extend(
+                create_dataset_recursively(
+                    project_type=project_type,
+                    project_meta=project_meta,
+                    dataset_info=ds,
+                    children=children,
+                    dst_project_id=created_project.id,
+                    dst_dataset_id=None,
+                    options=options,
+                    progress_cb=progress_cb,
+                )
+            )
+    return created_datasets
+
+
+def move_project(
+    src_project_info: sly.ProjectInfo,
+    dst_workspace_id: int,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+    existing_projects=None,
+):
+    if dst_project_id is None and src_project_info.workspace_id == dst_workspace_id:
+        sly.logger.warning(
+            "Moving project to the same workspace. Skipping",
+            extra={"project_id": src_project_info.id},
+        )
+        progress_cb(src_project_info.items_count)
+        return []
+    datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+    created_datasets = copy_project(
+        src_project_info=src_project_info,
+        dst_workspace_id=dst_workspace_id,
+        dst_project_id=dst_project_id,
+        dst_dataset_id=dst_dataset_id,
+        options=options,
+        progress_cb=progress_cb,
+        existing_projects=existing_projects,
+        datasets_tree=datasets_tree,
+    )
+    if dst_project_id == src_project_info.id or dst_dataset_id in [
+        ds.id for ds in flatten_tree(datasets_tree)
+    ]:
+        sly.logger.warning(
+            "Moving project to itself. Skipping deletion", extra={"project_id": dst_project_id}
+        )
+        return created_datasets
+    sly.logger.info("Removing source project", extra={"project_id": src_project_info.id})
+    run_in_executor(api.project.remove, src_project_info.id)
+    return created_datasets
+
+
+def copy_dataset_tree(
+    datasets_tree: Dict,
+    project_type: str,
+    project_meta: sly.ProjectMeta,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+):
+    created_datasets = []
+    with sly.ApiContext(api, project_meta=project_meta):
+        with ThreadPoolExecutor() as ds_executor:
+            tasks = []
+            for dataset, children in datasets_tree.items():
+                tasks.append(
+                    ds_executor.submit(
+                        create_dataset_recursively,
+                        project_type,
+                        project_meta,
+                        dataset,
+                        children,
+                        dst_project_id,
+                        dst_dataset_id,
+                        options,
+                        progress_cb=progress_cb,
+                    )
+                )
+            for task in as_completed(tasks):
+                created_datasets.extend(task.result())
+    return created_datasets
+
+
+def move_datasets_tree(
+    datasets_tree: Dict,
+    project_type: str,
+    project_meta: sly.ProjectMeta,
+    dst_project_id: int,
+    dst_dataset_id: int,
+    options: Dict,
+    progress_cb=None,
+):
+    creted_datasets = copy_dataset_tree(
+        datasets_tree,
+        project_type,
+        project_meta,
+        dst_project_id,
+        dst_dataset_id,
+        options,
+        progress_cb,
+    )
+    if dst_dataset_id in [ds.id for ds in flatten_tree(datasets_tree)]:
+        sly.logger.warning(
+            "Moving dataset to itself. Skipping deletion", extra={"dataset_id": dst_dataset_id}
+        )
+        return creted_datasets
+    sly.logger.info("Removing source datasets", extra={"dataset_id": dst_dataset_id})
+    run_in_executor(api.dataset.remove_batch, [ds.id for ds in flatten_tree(datasets_tree)])
+    return creted_datasets
 
 
 def copy_or_move(state: Dict, move: bool = False):
@@ -622,167 +990,77 @@ def copy_or_move(state: Dict, move: bool = False):
 
     items_to_create = 0
     created_datasets = []
-    items_project_infos = []
-    created_project_infos = []
     item_type = items[0][JSONKEYS.TYPE]
     if item_type == JSONKEYS.PROJECT:
+        items_project_infos = []
         for item in items:
             src_project_id = item[JSONKEYS.ID]
             src_project_info = api.project.get_info_by_id(src_project_id)
+            if src_project_info is None:
+                sly.logger.error("Project with id=%d not found", src_project_id)
+                raise ValueError("Project not found")
             items_project_infos.append(src_project_info)
             items_to_create += src_project_info.items_count
-
         progress.total = items_to_create
-        sly.logger.info("Items to create: %d", items_to_create)
+        progress.report_progress()
+        sly.logger.info("Total items: %d", items_to_create)
 
-        for src_project_info in items_project_infos:
-            src_project_id = src_project_info.id
-            project_type = src_project_info.type
-            src_datasets_tree = api.dataset.get_tree(src_project_id)
-            _dst_project_id = dst_project_id
-            _dst_dataset_id = dst_dataset_id
-            if dst_project_id is None:
-                # copy project to workspace
-                try:
-                    created_project_info, project_meta = create_project(
-                        src_project_id, dst_workspace_id, project_type, options
+        existing_projects = None
+        if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] != JSONKEYS.CONFLICT_RENAME:
+            existing_projects = api.project.get_list(dst_workspace_id)
+        f = move_project if move else copy_project
+        with ThreadPoolExecutor() as local_executor:
+            tasks = []
+            for item_project_info in items_project_infos:
+                tasks.append(
+                    local_executor.submit(
+                        f,
+                        src_project_info=item_project_info,
+                        dst_workspace_id=dst_workspace_id,
+                        dst_project_id=dst_project_id,
+                        dst_dataset_id=dst_dataset_id,
+                        options=options,
+                        progress_cb=_progress_cb,
+                        existing_projects=existing_projects,
                     )
-                    _dst_project_id = created_project_info.id
-                except ValueError as e:
-                    sly.logger.error("Failed to create project", exc_info=True)
-                    progress.current += src_project_info.items_count
-                    created_project_infos.append(None)
-                    continue  # TODO: update to_create
-                else:
-                    created_project_infos.append(created_project_info)
-            else:
-                try:
-                    project_meta = merge_project_meta(src_project_id, dst_project_id)
-                except ValueError as e:
-                    sly.logger.error("Failed to merge project meta", exc_info=True)
-                    progress.current += src_project_info.items_count
-                    continue
-                created_dataset_info = api.dataset.create(
-                    _dst_project_id,
-                    name=src_project_info.name,
-                    description=src_project_info.description,
-                    change_name_if_conflict=True,
-                    parent_id=dst_dataset_id,
                 )
-                _dst_dataset_id = created_dataset_info.id
+            for task in as_completed(tasks):
+                created_datasets.extend(task.result())
 
-            with sly.ApiContext(api, project_meta=project_meta):
-                with ThreadPoolExecutor(5) as ds_executor:
-                    tasks = []
-                    for dataset, children in src_datasets_tree.items():
-                        tasks.append(
-                            ds_executor.submit(
-                                create_dataset_recursively,
-                                project_type,
-                                project_meta,
-                                dataset,
-                                children,
-                                _dst_project_id,
-                                _dst_dataset_id,
-                                options,
-                                progress_cb=_progress_cb,
-                            )
-                        )
-                    for task in as_completed(tasks):
-                        created_datasets.extend(task.result())
     elif item_type == JSONKEYS.DATASET:
-        if dst_project_id is None:
-            raise ValueError(
-                "Destination project is not specified. Cannot copy dataset to a workspace or team"
-            )
         src_project_info = api.project.get_info_by_id(src_project_id)
-        project_meta = merge_project_meta(src_project_id, dst_project_id)
         project_type = src_project_info.type
+        project_meta = merge_project_meta(src_project_id, dst_project_id)
         src_dataset_ids = [item[JSONKEYS.ID] for item in items]
-        src_datasets_tree = api.dataset.get_tree(src_project_id)
-        src_datasets_tree = _find_tree(src_datasets_tree, src_dataset_ids)
+        datasets_tree = api.dataset.get_tree(src_project_id)
+        datasets_tree = _find_tree(datasets_tree, src_dataset_ids)
 
-        items_to_create = _count_items_in_tree(src_datasets_tree)
+        items_to_create = _count_items_in_tree(datasets_tree)
         progress.total = items_to_create
-        sly.logger.info("Items to create: %d", items_to_create)
-        with sly.ApiContext(api, project_meta=project_meta):
-            with ThreadPoolExecutor(5) as ds_executor:
-                tasks = []
-                for dataset, children in src_datasets_tree.items():
-                    tasks.append(
-                        ds_executor.submit(
-                            create_dataset_recursively,
-                            project_type,
-                            project_meta,
-                            dataset,
-                            children,
-                            dst_project_id,
-                            dst_dataset_id,
-                            options,
-                            progress_cb=_progress_cb,
-                        )
-                    )
-                for task in as_completed(tasks):
-                    created_datasets.extend(task.result())
+        progress.report_progress()
+        sly.logger.info("Total items: %d", items_to_create)
+        if move:
+            created_datasets = move_datasets_tree(
+                datasets_tree,
+                project_type=project_type,
+                project_meta=project_meta,
+                dst_project_id=dst_project_id,
+                dst_dataset_id=dst_dataset_id,
+                options=options,
+                progress_cb=_progress_cb,
+            )
+        else:
+            created_datasets = copy_dataset_tree(
+                datasets_tree,
+                project_type=project_type,
+                project_meta=project_meta,
+                dst_project_id=dst_project_id,
+                dst_dataset_id=dst_dataset_id,
+                options=options,
+                progress_cb=_progress_cb,
+            )
     else:
         raise ValueError(f"Unsupported item type: {item_type}")
-
-    # validate before deleting the source
-    created_items_n = sum(
-        0 if dataset is None else dataset.items_count for dataset in created_datasets
-    )
-    assert (
-        created_items_n == items_to_create
-    ), f"Items count mismatch. Created items: {created_items_n}, expected: {items_to_create}"
-    sly.logger.info(
-        "Created %d items in %d datasets",
-        created_items_n,
-        sum(1 for ds in created_datasets if ds is not None),
-    )
-
-    if (
-        options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE
-        and len(created_project_infos) > 0
-    ):
-        existing = api.project.get_list(dst_workspace_id)
-        for src, created in zip(items_project_infos, created_project_infos):
-            if created is None:
-                continue
-            if src.name in [pr.name for pr in existing]:
-                api.project.update(src.id, name=src.name + "__to_remove")
-                api.project.remove(src.id)
-                api.project.update(created.id, name=src.name)
-
-    if not move:
-        return
-
-    sly.logger.info("Deleting source items")
-    # delete
-    progress.message = "Deleting items"
-    if item_type == JSONKEYS.PROJECT:
-        src_project_ids = [item[JSONKEYS.ID] for item in items]
-        if dst_project_id in src_project_ids:
-            sly.logger.warning(
-                "Moving project to itself. Skipping deletion", extra={"project_id": dst_project_id}
-            )
-            src_project_ids = [pr_id for pr_id in src_project_ids if pr_id != dst_project_id]
-        api.project.remove_batch(src_project_ids)
-    elif item_type == JSONKEYS.DATASET:
-        src_dataset_ids = [item[JSONKEYS.ID] for item in items]
-        if dst_dataset_id is not None:
-            all_datasets = api.dataset.get_list(dst_project_id, recursive=True)
-            dst_dataset_info = [ds for ds in all_datasets if ds.id == dst_dataset_id][0]
-            dst_parents = _get_all_parents(dst_dataset_info, all_datasets)
-            if dst_dataset_id in src_dataset_ids or any(
-                ds.id in src_dataset_ids for ds in dst_parents
-            ):
-                sly.logger.warning(
-                    "Moving dataset to itself. Skipping deletion",
-                    extra={"dataset_id": dst_dataset_id},
-                )
-                src_dataset_ids = [ds_id for ds_id in src_dataset_ids if ds_id != dst_dataset_id]
-        api.dataset.remove_batch(src_dataset_ids)
-    return
 
 
 def main():
