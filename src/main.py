@@ -453,6 +453,7 @@ def create_dataset_recursively(
                     existing = api.dataset.get_info_by_name(
                         dst_project_id, name=dataset_info.name, parent_id=dst_dataset_id
                     )
+                    api.dataset.update(existing.id, existing.name + "__to_remove")
                     api.dataset.remove(existing.id)
                     created_info = api.dataset.update(
                         created_id, dataset_info.name, dataset_info.description
