@@ -1087,36 +1087,25 @@ def move_datasets_tree(
     return creted_datasets
 
 
-def get_item_infos(dataset_id: int, item_ids: List[int], item_type: str):
+def get_item_infos(dataset_id: int, item_ids: List[int], project_type: str):
     filters = [{"field": "id", "operator": "in", "value": item_ids}]
-    if item_type == JSONKEYS.IMAGE:
+    if project_type == sly.ProjectType.IMAGES:
         return api.image.get_info_by_id_batch(item_ids, force_metadata_for_links=False)
-    if item_type == JSONKEYS.VIDEO:
+    if project_type == sly.ProjectType.VIDEOS:
         return api.video.get_info_by_id_batch(item_ids)
-    if item_type == JSONKEYS.VOLUME:
+    if project_type == sly.ProjectType.VOLUMES:
         return api.volume.get_list(dataset_id, filters)
-    if item_type == JSONKEYS.POINTCLOUD:
+    if project_type == sly.ProjectType.POINT_CLOUDS:
         return api.pointcloud.get_list(dataset_id, filters)
-    else:
-        raise ValueError("Unknown item type")
-
-
-def project_type_from_item_type(item_type: str):
-    if item_type == JSONKEYS.IMAGE:
-        return str(sly.ProjectType.IMAGES)
-    if item_type == JSONKEYS.VIDEO:
-        return str(sly.ProjectType.VIDEOS)
-    if item_type == JSONKEYS.VOLUME:
-        return str(sly.ProjectType.VOLUMES)
-    if item_type == JSONKEYS.POINTCLOUD:
-        return str(sly.ProjectType.POINT_CLOUDS)
+    if project_type == sly.ProjectType.POINT_CLOUD_EPISODES:
+        return api.pointcloud_episode.get_list(dataset_id, filters)
     else:
         raise ValueError("Unknown item type")
 
 
 def copy_items_to_dataset(
     items: List[Dict],
-    item_type: str,
+    project_type: str,
     src_dataset_id: int,
     dst_dataset_id: int,
     project_meta: sly.ProjectMeta,
@@ -1124,11 +1113,11 @@ def copy_items_to_dataset(
     progress_cb=None,
 ):
     item_ids = [item[JSONKEYS.ID] for item in items]
-    item_infos = get_item_infos(src_dataset_id, item_ids, item_type)
+    item_infos = get_item_infos(src_dataset_id, item_ids, project_type)
     created_item_infos = clone_items(
         src_dataset_id,
         dst_dataset_id,
-        project_type=project_type_from_item_type(item_type),
+        project_type=project_type,
         project_meta=project_meta,
         options=options,
         progress_cb=progress_cb,
@@ -1153,7 +1142,7 @@ def delete_items(item_infos: List):
 
 def move_items_to_dataset(
     items: List[Dict],
-    item_type: str,
+    project_type: str,
     src_dataset_id: int,
     dst_dataset_id: int,
     project_meta: sly.ProjectMeta,
@@ -1161,11 +1150,11 @@ def move_items_to_dataset(
     progress_cb=None,
 ):
     item_ids = [item[JSONKEYS.ID] for item in items]
-    item_infos = get_item_infos(src_dataset_id, item_ids, item_type)
+    item_infos = get_item_infos(src_dataset_id, item_ids, project_type)
     created_item_infos = clone_items(
         src_dataset_id,
         dst_dataset_id,
-        project_type=project_type_from_item_type(item_type),
+        project_type=project_type,
         project_meta=project_meta,
         options=options,
         progress_cb=progress_cb,
@@ -1272,16 +1261,12 @@ def copy_or_move(state: Dict, move: bool = False):
                 options=options,
                 progress_cb=_progress_cb,
             )
-    elif item_type in [
-        JSONKEYS.IMAGE,
-        JSONKEYS.VIDEO,
-        JSONKEYS.VOLUME,
-        JSONKEYS.POINTCLOUD,
-    ]:
+    elif item_type == JSONKEYS.IMAGE:
         items_to_create = len(items)
         progress.total = items_to_create
         progress.report_progress()
         sly.logger.info("Total items: %d", items_to_create)
+        src_project_info = api.project.get_info_by_id(src_project_id)
         if dst_project_id == src_project_id:
             project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
         else:
@@ -1291,7 +1276,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 return
             move_items_to_dataset(
                 items,
-                item_type,
+                src_project_info.type,
                 src_dataset_id,
                 dst_dataset_id,
                 project_meta,
