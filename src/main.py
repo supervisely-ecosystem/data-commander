@@ -81,25 +81,40 @@ def clone_images_with_annotations(
     options,
     progress_cb=None,
 ) -> List[sly.ImageInfo]:
+    existing = api.image.get_list(dst_dataset_id)
+    existing_names = {info.name for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        existing = api.image.get_list(dst_dataset_id)
-        existing_names = {info.name for info in existing}
         image_infos = [info for info in image_infos if info.name not in existing_names]
 
     if len(image_infos) == 0:
         return []
 
     def _copy_imgs():
+        names = [info.name for info in image_infos]
+        ids = [info.id for info in image_infos]
+        metas = [info.meta for info in image_infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        to_remove = []
+        for i, name in enumerate(names):
+            if name in existing_names:
+                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
+                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                    to_remove.append(name)
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            api.image.remove_batch(rm_ids)
         dst_image_infos = api.image.upload_ids(
             dst_dataset_id,
-            names=[info.name for info in image_infos],
-            ids=[info.id for info in image_infos],
-            metas=[info.meta for info in image_infos],
+            names=names,
+            ids=ids,
+            metas=metas,
             batch_size=UPLOAD_IMAGES_BATCH_SIZE,
             force_metadata_for_links=False,
             infos=image_infos,
             skip_validation=True,  # TODO: check if it is needed
-            conflict_resolution=options[JSONKEYS.CONFLICT_RESOLUTION_MODE],
         )
         return dst_image_infos
 
