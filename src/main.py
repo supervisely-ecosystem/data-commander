@@ -1089,15 +1089,15 @@ def move_datasets_tree(
 
 def get_item_infos(dataset_id: int, item_ids: List[int], project_type: str):
     filters = [{"field": "id", "operator": "in", "value": item_ids}]
-    if project_type == sly.ProjectType.IMAGES:
+    if project_type == str(sly.ProjectType.IMAGES):
         return api.image.get_info_by_id_batch(item_ids, force_metadata_for_links=False)
-    if project_type == sly.ProjectType.VIDEOS:
+    if project_type == str(sly.ProjectType.VIDEOS):
         return api.video.get_info_by_id_batch(item_ids)
-    if project_type == sly.ProjectType.VOLUMES:
+    if project_type == str(sly.ProjectType.VOLUMES):
         return api.volume.get_list(dataset_id, filters)
-    if project_type == sly.ProjectType.POINT_CLOUDS:
+    if project_type == str(sly.ProjectType.POINT_CLOUDS):
         return api.pointcloud.get_list(dataset_id, filters)
-    if project_type == sly.ProjectType.POINT_CLOUD_EPISODES:
+    if project_type == str(sly.ProjectType.POINT_CLOUD_EPISODES):
         return api.pointcloud_episode.get_list(dataset_id, filters)
     else:
         raise ValueError("Unknown item type")
@@ -1286,7 +1286,7 @@ def copy_or_move(state: Dict, move: bool = False):
         else:
             copy_items_to_dataset(
                 items,
-                item_type,
+                src_project_info.type,
                 src_dataset_id,
                 dst_dataset_id,
                 project_meta,
