@@ -101,7 +101,7 @@ def clone_images_with_annotations(
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
@@ -193,7 +193,7 @@ def clone_videos_with_annotations(
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
@@ -270,7 +270,7 @@ def clone_volumes_with_annotations(
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
@@ -346,7 +346,7 @@ def clone_pointclouds_with_annotations(
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
@@ -431,7 +431,7 @@ def clone_pointcloud_episodes_with_annotations(
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
