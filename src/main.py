@@ -7,7 +7,6 @@ from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 
 import supervisely as sly
-from supervisely.api.module_api import RemoveableBulkModuleApi
 
 
 import src.api_utils as api_utils
@@ -49,7 +48,7 @@ class JSONKEYS:
     POINTCLOUD_EPISODE = "pointcloud_episode"
 
 
-api = sly.Api()
+api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 
 
