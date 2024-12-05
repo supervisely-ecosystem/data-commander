@@ -1,11 +1,13 @@
 import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from datetime import datetime
 from queue import Queue
 import os
 from typing import Dict, List, Tuple
 from dotenv import load_dotenv
 
 import supervisely as sly
+from supervisely.api.module_api import RemoveableBulkModuleApi
 
 
 import src.api_utils as api_utils
@@ -40,6 +42,11 @@ class JSONKEYS:
     CONFLICT_SKIP = "skip"
     CONFLICT_RENAME = "rename"
     CONFLICT_REPLACE = "replace"
+    IMAGE = "image"
+    VIDEO = "video"
+    VOLUME = "volume"
+    POINTCLOUD = "pointcloud"
+    POINTCLOUD_EPISODE = "pointcloud_episode"
 
 
 api = sly.Api()
@@ -74,7 +81,12 @@ def clone_images_with_annotations(
     project_meta: sly.ProjectMeta,
     options,
     progress_cb=None,
-) -> sly.ImageInfo:
+) -> List[sly.ImageInfo]:
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        existing = api.image.get_list(dst_dataset_id)
+        existing_names = {info.name for info in existing}
+        image_infos = [info for info in image_infos if info.name not in existing_names]
+
     if len(image_infos) == 0:
         return []
 
@@ -142,17 +154,40 @@ def clone_videos_with_annotations(
     project_meta: sly.ProjectMeta,
     options,
     progress_cb=None,
-) -> sly.api.video_api.VideoInfo:
+) -> List[sly.api.video_api.VideoInfo]:
+    if len(video_infos) == 0:
+        return []
+
+    existing = api.video.get_list(dst_dataset_id)
+    existing_names = {info.name for info in existing}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        video_infos = [info for info in video_infos if info.name not in existing_names]
+
     if len(video_infos) == 0:
         return []
 
     src_dataset_id = video_infos[0].dataset_id
 
     def _copy_videos(src_infos):
+        names = [info.name for info in src_infos]
+        ids = [info.id for info in src_infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        to_remove = []
+        for i, name in enumerate(names):
+            if name in existing_names:
+                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
+                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                    to_remove.append(name)
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            api.video.remove_batch(rm_ids)
         dst_infos = api.video.upload_ids(
             dst_dataset_id,
-            names=[info.name for info in src_infos],
-            ids=[info.id for info in src_infos],
+            names=names,
+            ids=ids,
             infos=src_infos,
         )
         return {src_info.id: dst_info for src_info, dst_info in zip(src_infos, dst_infos)}
@@ -198,18 +233,39 @@ def clone_volumes_with_annotations(
     project_meta: sly.ProjectMeta,
     options,
     progress_cb=None,
-) -> sly.api.volume_api.VolumeInfo:
+) -> List[sly.api.volume_api.VolumeInfo]:
+    existing = api.volume.get_list(dst_dataset_id)
+    existing_names = {info.name for info in existing}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        volume_infos = [info for info in volume_infos if info.name not in existing_names]
+
     if len(volume_infos) == 0:
         return []
 
     src_dataset_id = volume_infos[0].dataset_id
 
     def _copy_volumes(infos):
+        names = [info.name for info in infos]
+        hashes = [info.hash for info in infos]
+        metas = [info.meta for info in infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        to_remove = []
+        for i, name in enumerate(names):
+            if name in existing_names:
+                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
+                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                    to_remove.append(name)
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            api.volume.remove_batch(rm_ids)
         dst_volumes = api.volume.upload_hashes(
             dataset_id=dst_dataset_id,
-            names=[info.name for info in infos],
-            hashes=[info.hash for info in infos],
-            metas=[info.meta for info in infos],
+            names=names,
+            hashes=hashes,
+            metas=metas,
         )
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
@@ -248,23 +304,44 @@ def clone_volumes_with_annotations(
 
 
 def clone_pointclouds_with_annotations(
-    pointcloud_infos: [sly.api.pointcloud_api.PointcloudInfo],
+    pointcloud_infos: List[sly.api.pointcloud_api.PointcloudInfo],
     dst_dataset_id: int,
     project_meta: sly.ProjectMeta,
     options,
     progress_cb=None,
-) -> sly.api.pointcloud_api.PointcloudInfo:
+) -> List[sly.api.pointcloud_api.PointcloudInfo]:
+    existing = api.pointcloud.get_list(dst_dataset_id)
+    existing_names = {info.name for info in existing}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        pointcloud_infos = [info for info in pointcloud_infos if info.name not in existing_names]
+
     if len(pointcloud_infos) == 0:
         return []
 
     src_dataset_id = pointcloud_infos[0].dataset_id
 
     def _copy_pointclouds(infos):
+        names = [info.name for info in infos]
+        hashes = [info.hash for info in infos]
+        metas = [info.meta for info in infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        to_remove = []
+        for i, name in enumerate(names):
+            if name in existing_names:
+                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
+                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                    to_remove.append(name)
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            api.pointcloud.remove_batch(rm_ids)
         dst_infos = api.pointcloud.upload_hashes(
             dataset_id=dst_dataset_id,
-            names=[info.name for info in infos],
-            hashes=[info.hash for info in infos],
-            metas=[info.meta for info in infos],
+            names=names,
+            hashes=hashes,
+            metas=metas,
         )
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
@@ -308,7 +385,14 @@ def clone_pointcloud_episodes_with_annotations(
     project_meta: sly.ProjectMeta,
     options,
     progress_cb=None,
-):
+) -> List[sly.api.pointcloud_api.PointcloudInfo]:
+    existing = api.pointcloud_episode.get_list(dst_dataset_id)
+    existing_names = {info.name for info in existing}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        pointcloud_episode_infos = [
+            info for info in pointcloud_episode_infos if info.name not in existing_names
+        ]
+
     if len(pointcloud_episode_infos) == 0:
         return []
 
@@ -322,11 +406,27 @@ def clone_pointcloud_episodes_with_annotations(
     frame_to_pointcloud_ids = {}
 
     def _upload_hashes(infos):
+        names = [info.name for info in infos]
+        hashes = [info.hash for info in infos]
+        metas = [info.meta for info in infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        to_remove = []
+        for i, name in enumerate(names):
+            if name in existing_names:
+                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
+                elif options[JSONKEYS.CONFLICT_REPLACE]:
+                    to_remove.append(name)
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            api.pointcloud_episode.remove_batch(rm_ids)
         dst_infos = api.pointcloud_episode.upload_hashes(
             dataset_id=dst_dataset_id,
-            names=[info.name for info in infos],
-            hashes=[info.hash for info in infos],
-            metas=[info.meta for info in infos],
+            names=names,
+            hashes=hashes,
+            metas=metas,
         )
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
@@ -374,22 +474,33 @@ def clone_pointcloud_episodes_with_annotations(
 
 
 def clone_items(
-    src_dataset_id, dst_dataset_id, project_type, project_meta, options, progress_cb=None
+    src_dataset_id,
+    dst_dataset_id,
+    project_type,
+    project_meta,
+    options,
+    progress_cb=None,
+    src_infos=None,
 ):
     if project_type == str(sly.ProjectType.IMAGES):
-        src_infos = api.image.get_list(src_dataset_id)
+        if src_infos is None:
+            src_infos = api.image.get_list(src_dataset_id)
         clone_f = clone_images_with_annotations
     elif project_type == str(sly.ProjectType.VIDEOS):
-        src_infos = api.video.get_list(src_dataset_id)
+        if src_infos is None:
+            src_infos = api.video.get_list(src_dataset_id)
         clone_f = clone_videos_with_annotations
     elif project_type == str(sly.ProjectType.VOLUMES):
-        src_infos = api.volume.get_list(src_dataset_id)
+        if src_infos is None:
+            src_infos = api.volume.get_list(src_dataset_id)
         clone_f = clone_volumes_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUDS):
-        src_infos = api.pointcloud.get_list(src_dataset_id)
+        if src_infos is None:
+            src_infos = api.pointcloud.get_list(src_dataset_id)
         clone_f = clone_pointclouds_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUD_EPISODES):
-        src_infos = api.pointcloud_episode.get_list(src_dataset_id)
+        if src_infos is None:
+            src_infos = api.pointcloud_episode.get_list(src_dataset_id)
         clone_f = clone_pointcloud_episodes_with_annotations
     else:
         raise NotImplementedError(
@@ -398,7 +509,7 @@ def clone_items(
 
     dst_infos = clone_f(src_infos, dst_dataset_id, project_meta, options, progress_cb)
     sly.logger.info(
-        "Cloned %d images",
+        "Cloned %d items",
         len(dst_infos),
         extra={"src_dataset_id": src_dataset_id, "dst_dataset_id": dst_dataset_id},
     )
@@ -962,6 +1073,94 @@ def move_datasets_tree(
     return creted_datasets
 
 
+def get_item_infos(dataset_id: int, item_ids: List[int], item_type: str):
+    filters = [{"field": "id", "operator": "in", "value": item_ids}]
+    if item_type == JSONKEYS.IMAGE:
+        return api.image.get_info_by_id_batch(item_ids, force_metadata_for_links=False)
+    if item_type == JSONKEYS.VIDEO:
+        return api.video.get_info_by_id_batch(item_ids)
+    if item_type == JSONKEYS.VOLUME:
+        return api.volume.get_list(dataset_id, filters)
+    if item_type == JSONKEYS.POINTCLOUD:
+        return api.pointcloud.get_list(dataset_id, filters)
+    else:
+        raise ValueError("Unknown item type")
+
+
+def project_type_from_item_type(item_type: str):
+    if item_type == JSONKEYS.IMAGE:
+        return str(sly.ProjectType.IMAGES)
+    if item_type == JSONKEYS.VIDEO:
+        return str(sly.ProjectType.VIDEOS)
+    if item_type == JSONKEYS.VOLUME:
+        return str(sly.ProjectType.VOLUMES)
+    if item_type == JSONKEYS.POINTCLOUD:
+        return str(sly.ProjectType.POINT_CLOUDS)
+    else:
+        raise ValueError("Unknown item type")
+
+
+def copy_items_to_dataset(
+    items: List[Dict],
+    item_type: str,
+    src_dataset_id: int,
+    dst_dataset_id: int,
+    project_meta: sly.ProjectMeta,
+    options: Dict,
+    progress_cb=None,
+):
+    item_ids = [item[JSONKEYS.ID] for item in items]
+    item_infos = get_item_infos(src_dataset_id, item_ids, item_type)
+    created_item_infos = clone_items(
+        src_dataset_id,
+        dst_dataset_id,
+        project_type=project_type_from_item_type(item_type),
+        project_meta=project_meta,
+        options=options,
+        progress_cb=progress_cb,
+        src_infos=item_infos,
+    )
+    return created_item_infos
+
+
+def delete_items(item_infos: List):
+    if len(item_infos) == 0:
+        return
+    item_ids = [info.id for info in item_infos]
+    if isinstance(item_infos[0], sly.ImageInfo):
+        api.image.remove_batch(item_ids)
+    elif isinstance(item_infos[0], sly.api.video_api.VideoInfo):
+        api.video.remove_batch(item_ids)
+    elif isinstance(item_infos[0], sly.api.volume_api.VolumeInfo):
+        api.volume.remove_batch(item_ids)
+    elif isinstance(item_infos[0], sly.api.pointcloud_api.PointcloudInfo):
+        api.pointcloud.remove_batch(item_ids)
+
+
+def move_items_to_dataset(
+    items: List[Dict],
+    item_type: str,
+    src_dataset_id: int,
+    dst_dataset_id: int,
+    project_meta: sly.ProjectMeta,
+    options: Dict,
+    progress_cb=None,
+):
+    item_ids = [item[JSONKEYS.ID] for item in items]
+    item_infos = get_item_infos(src_dataset_id, item_ids, item_type)
+    created_item_infos = clone_items(
+        src_dataset_id,
+        dst_dataset_id,
+        project_type=project_type_from_item_type(item_type),
+        project_meta=project_meta,
+        options=options,
+        progress_cb=progress_cb,
+        src_infos=item_infos,
+    )
+    delete_items(item_infos)
+    return created_item_infos
+
+
 def copy_or_move(state: Dict, move: bool = False):
     source = state[JSONKEYS.SOURCE]
     destination = state[JSONKEYS.DESTINATION]
@@ -1058,6 +1257,42 @@ def copy_or_move(state: Dict, move: bool = False):
                 dst_dataset_id=dst_dataset_id,
                 options=options,
                 progress_cb=_progress_cb,
+            )
+    elif item_type in [
+        JSONKEYS.IMAGE,
+        JSONKEYS.VIDEO,
+        JSONKEYS.VOLUME,
+        JSONKEYS.POINTCLOUD,
+    ]:
+        items_to_create = len(items)
+        progress.total = items_to_create
+        progress.report_progress()
+        sly.logger.info("Total items: %d", items_to_create)
+        if dst_project_id == src_project_id:
+            project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
+        else:
+            project_meta = merge_project_meta(src_project_id, dst_project_id)
+        if move:
+            if src_dataset_id == dst_dataset_id:
+                return
+            move_items_to_dataset(
+                items,
+                item_type,
+                src_dataset_id,
+                dst_dataset_id,
+                project_meta,
+                options,
+                _progress_cb,
+            )
+        else:
+            copy_items_to_dataset(
+                items,
+                item_type,
+                src_dataset_id,
+                dst_dataset_id,
+                project_meta,
+                options,
+                _progress_cb,
             )
     else:
         raise ValueError(f"Unsupported item type: {item_type}")
