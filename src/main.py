@@ -207,6 +207,7 @@ def clone_videos_with_annotations(
         ids = [info.id for info in src_infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
+        to_rename = {}
         for i, name in enumerate(names):
             if name in existing_names:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
@@ -214,17 +215,33 @@ def clone_videos_with_annotations(
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
                     to_remove.append(name)
-        if to_remove:
-            # TODO: upload renamed -> delete existing -> rename back
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            api.video.remove_batch(rm_ids)
+                    to_rename[names] = name
         dst_infos = api.video.upload_ids(
             dst_dataset_id,
             names=names,
             ids=ids,
             infos=src_infos,
         )
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            run_in_executor(api.image.remove_batch, rm_ids)
+        if to_rename:
+            rename_tasks = []
+            for dst_info in dst_infos:
+                if dst_info.name in to_rename:
+                    rename_tasks.append(
+                        executor.submit(api.image.edit, dst_info.id, name=to_rename[dst_info.name])
+                    )
+            for task in as_completed(rename_tasks):
+                info = task.result()
+                dst_image_infos = [
+                    info if info.id == dst_image_info.id else dst_image_info
+                    for dst_image_info in dst_image_infos
+                ]
         return {src_info.id: dst_info for src_info, dst_info in zip(src_infos, dst_infos)}
 
     def _copy_anns(src_ids, dst_ids):
@@ -285,6 +302,7 @@ def clone_volumes_with_annotations(
         metas = [info.meta for info in infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
+        to_rename = {}
         for i, name in enumerate(names):
             if name in existing_names:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
@@ -292,17 +310,33 @@ def clone_volumes_with_annotations(
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
                     to_remove.append(name)
-        if to_remove:
-            # TODO: upload renamed -> delete existing -> rename back
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            api.volume.remove_batch(rm_ids)
+                    to_rename[names[i]] = name
         dst_volumes = api.volume.upload_hashes(
             dataset_id=dst_dataset_id,
             names=names,
             hashes=hashes,
             metas=metas,
         )
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            run_in_executor(api.image.remove_batch, rm_ids)
+        if to_rename:
+            rename_tasks = []
+            for dst_info in dst_volumes:
+                if dst_info.name in to_rename:
+                    rename_tasks.append(
+                        executor.submit(api.image.edit, dst_info.id, name=to_rename[dst_info.name])
+                    )
+            for task in as_completed(rename_tasks):
+                info = task.result()
+                dst_image_infos = [
+                    info if info.id == dst_image_info.id else dst_image_info
+                    for dst_image_info in dst_image_infos
+                ]
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
     def _copy_anns(src_ids, dst_ids):
@@ -362,6 +396,7 @@ def clone_pointclouds_with_annotations(
         metas = [info.meta for info in infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
+        to_rename = {}
         for i, name in enumerate(names):
             if name in existing_names:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
@@ -369,17 +404,33 @@ def clone_pointclouds_with_annotations(
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
                     to_remove.append(name)
-        if to_remove:
-            # TODO: upload renamed -> delete existing -> rename back
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            api.pointcloud.remove_batch(rm_ids)
+                    to_rename[names[i]] = name
         dst_infos = api.pointcloud.upload_hashes(
             dataset_id=dst_dataset_id,
             names=names,
             hashes=hashes,
             metas=metas,
         )
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            run_in_executor(api.image.remove_batch, rm_ids)
+        if to_rename:
+            rename_tasks = []
+            for dst_info in dst_infos:
+                if dst_info.name in to_rename:
+                    rename_tasks.append(
+                        executor.submit(api.image.edit, dst_info.id, name=to_rename[dst_info.name])
+                    )
+            for task in as_completed(rename_tasks):
+                info = task.result()
+                dst_image_infos = [
+                    info if info.id == dst_image_info.id else dst_image_info
+                    for dst_image_info in dst_image_infos
+                ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _copy_anns(src_ids, dst_ids):
@@ -442,6 +493,7 @@ def clone_pointcloud_episodes_with_annotations(
         metas = [info.meta for info in infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
+        to_rename = {}
         for i, name in enumerate(names):
             if name in existing_names:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
@@ -449,16 +501,33 @@ def clone_pointcloud_episodes_with_annotations(
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
                     to_remove.append(name)
-        if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            api.pointcloud_episode.remove_batch(rm_ids)
+                    to_rename[names[i]] = name
         dst_infos = api.pointcloud_episode.upload_hashes(
             dataset_id=dst_dataset_id,
             names=names,
             hashes=hashes,
             metas=metas,
         )
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            run_in_executor(api.image.remove_batch, rm_ids)
+        if to_rename:
+            rename_tasks = []
+            for dst_info in dst_infos:
+                if dst_info.name in to_rename:
+                    rename_tasks.append(
+                        executor.submit(api.image.edit, dst_info.id, name=to_rename[dst_info.name])
+                    )
+            for task in as_completed(rename_tasks):
+                info = task.result()
+                dst_image_infos = [
+                    info if info.id == dst_image_info.id else dst_image_info
+                    for dst_image_info in dst_image_infos
+                ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _upload_single(src_id, dst_info):
