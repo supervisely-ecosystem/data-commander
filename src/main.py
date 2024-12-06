@@ -272,7 +272,8 @@ def clone_videos_with_annotations(
         elif progress_cb is not None:
             progress_cb(len(src_to_dst_map))
     if len(upload_anns_tasks) > 0:
-        wait(upload_anns_tasks)
+        for task in as_completed(upload_anns_tasks):
+            task.result()
     return [dst_infos_dict[src.id] for src in video_infos]
 
 
@@ -365,7 +366,8 @@ def clone_volumes_with_annotations(
         elif progress_cb is not None:
             progress_cb(len(src_to_dst_map))
     if len(upload_anns_tasks) > 0:
-        wait(upload_anns_tasks)
+        for task in as_completed(upload_anns_tasks)
+            task.result()
     return [dst_infos_dict[src.id] for src in volume_infos]
 
 
@@ -459,7 +461,8 @@ def clone_pointclouds_with_annotations(
         elif progress_cb is not None:
             progress_cb(len(src_to_dst_map))
     if len(upload_anns_tasks) > 0:
-        wait(upload_anns_tasks)
+        for task in as_completed(upload_anns_tasks):
+            task.result()
     return [dst_infos_dict[src.id] for src in pointcloud_infos]
 
 
@@ -573,7 +576,8 @@ def clone_pointcloud_episodes_with_annotations(
             for src_id, dst_info in src_to_dst_dict.items():
                 copy_anns_tasks.append(executor.submit(_upload_single, src_id, dst_info))
 
-    wait(copy_anns_tasks)
+    for task in as_completed(copy_anns_tasks):
+        task.result()
     api.pointcloud_episode.annotation.append(
         dataset_id=dst_dataset_id,
         ann=ann,
