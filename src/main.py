@@ -238,10 +238,7 @@ def clone_videos_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_image_infos = [
-                    info if info.id == dst_image_info.id else dst_image_info
-                    for dst_image_info in dst_image_infos
-                ]
+                dst_infos = [info if info.id == dst_info.id else dst_info for dst_info in dst_infos]
         return {src_info.id: dst_info for src_info, dst_info in zip(src_infos, dst_infos)}
 
     def _copy_anns(src_ids, dst_ids):
@@ -333,9 +330,8 @@ def clone_volumes_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_image_infos = [
-                    info if info.id == dst_image_info.id else dst_image_info
-                    for dst_image_info in dst_image_infos
+                dst_volumes = [
+                    info if info.id == dst_info.id else dst_info for dst_info in dst_volumes
                 ]
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
@@ -427,9 +423,9 @@ def clone_pointclouds_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_image_infos = [
-                    info if info.id == dst_image_info.id else dst_image_info
-                    for dst_image_info in dst_image_infos
+                dst_infos = [
+                    info if info.id == dst_info.id else dst_info
+                    for dst_info in dst_infos
                 ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
@@ -524,9 +520,9 @@ def clone_pointcloud_episodes_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_image_infos = [
-                    info if info.id == dst_image_info.id else dst_image_info
-                    for dst_image_info in dst_image_infos
+                dst_infos = [
+                    info if info.id == dst_info.id else dst_info
+                    for dst_info in dst_infos
                 ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
