@@ -337,7 +337,7 @@ def clone_volumes_with_annotations(
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
     def _copy_anns(src_ids, dst_ids):
-        ann_jsons = api.volume.annotation.download_bulk(src_dataset_id, src_ids)
+        ann_jsons = api.volume.annotation.download_bulk(src_ids)
         for ann_json, dst_id in zip(ann_jsons, dst_ids):
             key_id_map = sly.KeyIdMap()
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
@@ -1224,14 +1224,7 @@ def delete_items(item_infos: List):
     if len(item_infos) == 0:
         return
     item_ids = [info.id for info in item_infos]
-    if isinstance(item_infos[0], sly.ImageInfo):
-        api.image.remove_batch(item_ids)
-    elif isinstance(item_infos[0], sly.api.video_api.VideoInfo):
-        api.video.remove_batch(item_ids)
-    elif isinstance(item_infos[0], sly.api.volume_api.VolumeInfo):
-        api.volume.remove_batch(item_ids)
-    elif isinstance(item_infos[0], sly.api.pointcloud_api.PointcloudInfo):
-        api.pointcloud.remove_batch(item_ids)
+    api.image.remove_batch(item_ids)
 
 
 def move_items_to_dataset(
