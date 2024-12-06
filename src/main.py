@@ -81,7 +81,7 @@ def clone_images_with_annotations(
     options,
     progress_cb=None,
 ) -> List[sly.ImageInfo]:
-    existing = api.image.get_list(dst_dataset_id)
+    existing = run_in_executor(api.image.get_list, dst_dataset_id)
     existing_names = {info.name for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         image_infos = [info for info in image_infos if info.name not in existing_names]
@@ -95,6 +95,7 @@ def clone_images_with_annotations(
         metas = [info.meta for info in image_infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
+        to_rename = {}
         for i, name in enumerate(names):
             if name in existing_names:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
@@ -102,11 +103,13 @@ def clone_images_with_annotations(
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                    )
                     to_remove.append(name)
-        if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            api.image.remove_batch(rm_ids)
-        dst_image_infos = api.image.upload_ids(
+                    to_rename[names[i]] = name
+        dst_image_infos = run_in_executor(
+            api.image.upload_ids,
             dst_dataset_id,
             names=names,
             ids=ids,
@@ -116,6 +119,25 @@ def clone_images_with_annotations(
             infos=image_infos,
             skip_validation=True,  # TODO: check if it is needed
         )
+        if to_remove:
+            rm_ids = [info.id for info in existing if info.name in to_remove]
+            run_in_executor(api.image.remove_batch, rm_ids)
+        if to_rename:
+            rename_tasks = []
+            for dst_image_info in dst_image_infos:
+                if dst_image_info.name in to_rename:
+                    rename_tasks.append(
+                        executor.submit(
+                            api.image.edit, dst_image_info.id, name=to_rename[dst_image_info.name]
+                        )
+                    )
+            for task in as_completed(rename_tasks):
+                info = task.result()
+                dst_image_infos = [
+                    info if info.id == dst_image_info.id else dst_image_info
+                    for dst_image_info in dst_image_infos
+                ]
+
         return dst_image_infos
 
     def _upload_anns(img_ids, anns):
@@ -123,12 +145,11 @@ def clone_images_with_annotations(
         return len(img_ids)
 
     src_dataset_id = image_infos[0].dataset_id
-    copy_imgs_task = executor.submit(_copy_imgs)
+    dst_image_infos = _copy_imgs()
     download_anns_tasks = []
 
     sly.logger.info("clone annotations: %s", options[JSONKEYS.CLONE_ANNOTATIONS] == True)
     if not options[JSONKEYS.CLONE_ANNOTATIONS]:
-        dst_image_infos = copy_imgs_task.result()
         if progress_cb is not None:
             progress_cb(len(dst_image_infos))
         sly.logger.info("Clone annotations is disabled")
@@ -143,7 +164,6 @@ def clone_images_with_annotations(
                 force_metadata_for_links=False,
             )
         )
-    dst_image_infos = copy_imgs_task.result()
     src_to_dst_id_map = {src.id: dst.id for src, dst in zip(image_infos, dst_image_infos)}
     upload_tasks = []
     for task in as_completed(download_anns_tasks):
@@ -172,7 +192,7 @@ def clone_videos_with_annotations(
     if len(video_infos) == 0:
         return []
 
-    existing = api.video.get_list(dst_dataset_id)
+    existing = run_in_executor(api.video.get_list, dst_dataset_id)
     existing_names = {info.name for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         video_infos = [info for info in video_infos if info.name not in existing_names]
@@ -196,6 +216,7 @@ def clone_videos_with_annotations(
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
+            # TODO: upload renamed -> delete existing -> rename back
             rm_ids = [info.id for info in existing if info.name in to_remove]
             api.video.remove_batch(rm_ids)
         dst_infos = api.video.upload_ids(
@@ -248,7 +269,7 @@ def clone_volumes_with_annotations(
     options,
     progress_cb=None,
 ) -> List[sly.api.volume_api.VolumeInfo]:
-    existing = api.volume.get_list(dst_dataset_id)
+    existing = run_in_executor(api.volume.get_list, dst_dataset_id)
     existing_names = {info.name for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         volume_infos = [info for info in volume_infos if info.name not in existing_names]
@@ -273,6 +294,7 @@ def clone_volumes_with_annotations(
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
+            # TODO: upload renamed -> delete existing -> rename back
             rm_ids = [info.id for info in existing if info.name in to_remove]
             api.volume.remove_batch(rm_ids)
         dst_volumes = api.volume.upload_hashes(
@@ -349,6 +371,7 @@ def clone_pointclouds_with_annotations(
                 elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                     to_remove.append(name)
         if to_remove:
+            # TODO: upload renamed -> delete existing -> rename back
             rm_ids = [info.id for info in existing if info.name in to_remove]
             api.pointcloud.remove_batch(rm_ids)
         dst_infos = api.pointcloud.upload_hashes(
@@ -411,12 +434,6 @@ def clone_pointcloud_episodes_with_annotations(
         return []
 
     src_dataset_id = pointcloud_episode_infos[0].dataset_id
-
-    key_id_map = sly.KeyIdMap()
-    ann_json = api.pointcloud_episode.annotation.download(src_dataset_id)
-    ann = sly.PointcloudEpisodeAnnotation.from_json(
-        data=ann_json, project_meta=project_meta, key_id_map=key_id_map
-    )
     frame_to_pointcloud_ids = {}
 
     def _upload_hashes(infos):
@@ -468,8 +485,22 @@ def clone_pointcloud_episodes_with_annotations(
     for batch in sly.batched(pointcloud_episode_infos):
         copy_imgs_tasks.append(executor.submit(_upload_hashes, batch))
 
-    copy_anns_tasks = []
     dst_infos_dict = {}
+    if not options[JSONKEYS.CLONE_ANNOTATIONS]:
+        for task in as_completed(copy_imgs_tasks):
+            src_to_dst_dict = task.result()
+            dst_infos_dict.update(src_to_dst_dict)
+            if progress_cb is not None:
+                progress_cb(len(dst_infos_dict))
+        return [dst_infos_dict[src.id] for src in pointcloud_episode_infos]
+
+    key_id_map = sly.KeyIdMap()
+    ann_json = api.pointcloud_episode.annotation.download(src_dataset_id)
+    ann = sly.PointcloudEpisodeAnnotation.from_json(
+        data=ann_json, project_meta=project_meta, key_id_map=key_id_map
+    )
+
+    copy_anns_tasks = []
     for task in as_completed(copy_imgs_tasks):
         src_to_dst_dict = task.result()
         dst_infos_dict.update(src_to_dst_dict)
