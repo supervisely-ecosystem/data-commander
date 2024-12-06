@@ -366,7 +366,7 @@ def clone_volumes_with_annotations(
         elif progress_cb is not None:
             progress_cb(len(src_to_dst_map))
     if len(upload_anns_tasks) > 0:
-        for task in as_completed(upload_anns_tasks)
+        for task in as_completed(upload_anns_tasks):
             task.result()
     return [dst_infos_dict[src.id] for src in volume_infos]
 
@@ -425,10 +425,7 @@ def clone_pointclouds_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_infos = [
-                    info if info.id == dst_info.id else dst_info
-                    for dst_info in dst_infos
-                ]
+                dst_infos = [info if info.id == dst_info.id else dst_info for dst_info in dst_infos]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _copy_anns(src_ids, dst_ids):
@@ -523,10 +520,7 @@ def clone_pointcloud_episodes_with_annotations(
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_infos = [
-                    info if info.id == dst_info.id else dst_info
-                    for dst_info in dst_infos
-                ]
+                dst_infos = [info if info.id == dst_info.id else dst_info for dst_info in dst_infos]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _upload_single(src_id, dst_info):
