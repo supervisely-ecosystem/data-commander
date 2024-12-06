@@ -337,7 +337,7 @@ def clone_volumes_with_annotations(
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
     def _copy_anns(src_ids, dst_ids):
-        ann_jsons = api.volume.annotation.download_bulk(src_ids)
+        ann_jsons = api.volume.annotation.download_bulk(src_dataset_id, src_ids)
         for ann_json, dst_id in zip(ann_jsons, dst_ids):
             key_id_map = sly.KeyIdMap()
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
