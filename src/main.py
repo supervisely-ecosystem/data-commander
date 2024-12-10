@@ -82,104 +82,130 @@ def clone_images_with_annotations(
     progress_cb=None,
 ) -> List[sly.ImageInfo]:
     existing = run_in_executor(api.image.get_list, dst_dataset_id)
-    existing_names = {info.name for info in existing}
+    existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        image_infos = [info for info in image_infos if info.name not in existing_names]
+        len_before = len(image_infos)
+        image_infos = [info for info in image_infos if info.name not in existing]
+        if progress_cb is not None:
+            progress_cb(len_before - len(image_infos))
 
     if len(image_infos) == 0:
         return []
 
-    def _copy_imgs():
-        names = [info.name for info in image_infos]
-        ids = [info.id for info in image_infos]
-        metas = [info.meta for info in image_infos]
-        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        to_remove = []
-        to_rename = {}
-        for i, name in enumerate(names):
-            if name in existing_names:
-                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
-                    names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
-                    )
-                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
-                    names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
-                    )
-                    to_remove.append(name)
-                    to_rename[names[i]] = name
-        dst_image_infos = run_in_executor(
-            api.image.upload_ids,
+    src_dataset_id = image_infos[0].dataset_id
+
+    def _copy_imgs(
+        names,
+        ids,
+        metas,
+        infos,
+    ):
+        uploaded = api.image.upload_ids(
             dst_dataset_id,
             names=names,
             ids=ids,
             metas=metas,
             batch_size=UPLOAD_IMAGES_BATCH_SIZE,
             force_metadata_for_links=False,
-            infos=image_infos,
+            infos=infos,
             skip_validation=True,  # TODO: check if it is needed
         )
-        if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            run_in_executor(api.image.remove_batch, rm_ids)
-        if to_rename:
-            rename_tasks = []
-            for dst_image_info in dst_image_infos:
-                if dst_image_info.name in to_rename:
-                    rename_tasks.append(
-                        executor.submit(
-                            api.image.edit, dst_image_info.id, name=to_rename[dst_image_info.name]
-                        )
+        return (infos, uploaded)
+
+    to_rename = {}  # {new_name: old_name}
+    upload_images_tasks = []
+    for src_image_infos_batch in sly.batched(image_infos, UPLOAD_IMAGES_BATCH_SIZE):
+        names = [info.name for info in src_image_infos_batch]
+        ids = [info.id for info in src_image_infos_batch]
+        metas = [info.meta for info in src_image_infos_batch]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+        if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
+            JSONKEYS.CONFLICT_RENAME,
+            JSONKEYS.CONFLICT_REPLACE,
+        ]:
+            for i, name in enumerate(names):
+                if name in existing:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
                     )
-            for task in as_completed(rename_tasks):
-                info = task.result()
-                dst_image_infos = [
-                    info if info.id == dst_image_info.id else dst_image_info
-                    for dst_image_info in dst_image_infos
-                ]
-
-        return dst_image_infos
-
-    def _upload_anns(img_ids, anns):
-        api.annotation.upload_jsons(img_ids, anns, skip_bounds_validation=True)
-        return len(img_ids)
-
-    src_dataset_id = image_infos[0].dataset_id
-    dst_image_infos = _copy_imgs()
-    download_anns_tasks = []
-
-    sly.logger.info("clone annotations: %s", options[JSONKEYS.CLONE_ANNOTATIONS] == True)
-    if not options[JSONKEYS.CLONE_ANNOTATIONS]:
-        if progress_cb is not None:
-            progress_cb(len(dst_image_infos))
-        sly.logger.info("Clone annotations is disabled")
-        return dst_image_infos
-
-    for batch in sly.batched(image_infos):
-        download_anns_tasks.append(
+                    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                        to_rename[names[i]] = name
+        upload_images_tasks.append(
             executor.submit(
-                api.annotation.download_batch,
-                src_dataset_id,
-                [info.id for info in batch],
-                force_metadata_for_links=False,
+                _copy_imgs,
+                names=names,
+                ids=ids,
+                metas=metas,
+                infos=src_image_infos_batch,
             )
         )
-    src_to_dst_id_map = {src.id: dst.id for src, dst in zip(image_infos, dst_image_infos)}
-    upload_tasks = []
-    for task in as_completed(download_anns_tasks):
-        ann_infos_batch: List[sly.api.annotation_api.AnnotationInfo] = task.result()
-        upload_tasks.append(
-            executor.submit(
-                _upload_anns,
-                [src_to_dst_id_map[ann_info.image_id] for ann_info in ann_infos_batch],
-                [ann_info.annotation for ann_info in ann_infos_batch],
-            )
+
+    def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
+        src_ann_infos = api.annotation.download_batch(
+            src_dataset_id, [info.id for info in src], force_metadata_for_links=False
+        )  # not sure that the order is perserved
+        src_id_to_dst_id = {s.id: d.id for s, d in zip(src, dst)}
+        api.annotation.upload_jsons(
+            [src_id_to_dst_id[info.image_id] for info in src_ann_infos],
+            [info.annotation for info in src_ann_infos],
+            skip_bounds_validation=True,
         )
-    for task in as_completed(upload_tasks):
-        uploaded = task.result()
+        return src, dst
+
+    replace_tasks = []
+
+    def _rename(info, new_name, to_remove_info):
+        api.image.rename(to_remove_info.id, to_remove_info.name + "__to_remove")
+        api.image.rename(info.id, new_name)
+        return info, to_remove_info
+
+    def _maybe_replace(src, dst):
+        if len(to_rename) == 0:
+            return src, dst
+        rename_tasks = []
+        for dst_image_info in dst:
+            if dst_image_info.name in to_rename:
+                new_name = to_rename[dst_image_info.name]
+                to_remove_info = existing[new_name]
+                rename_tasks.append(
+                    executor.submit(_rename, dst_image_info, new_name, to_remove_info)
+                )
+        to_remove = []
+        for task in as_completed(rename_tasks):
+            info, to_remove_info = task.result()
+            to_remove.append(to_remove_info)
+        run_in_executor(
+            api.image.remove_batch, [info.id for info in to_remove], batch_size=len(to_remove)
+        )
+        return src, dst
+
+    local_executor = ThreadPoolExecutor(max_workers=5)
+    src_id_to_dst_image_info = {}
+    for task in as_completed(upload_images_tasks):
+        src_image_infos, uploaded_images_infos = task.result()
+        for s, d in zip(src_image_infos, uploaded_images_infos):
+            src_id_to_dst_image_info[s.id] = d
+        if options[JSONKEYS.CLONE_ANNOTATIONS]:
+            upload_anns_tasks = []
+            for src_batch, dst_batch in zip(
+                sly.batched(src_image_infos), sly.batched(uploaded_images_infos)
+            ):
+                upload_anns_tasks.append(executor.submit(_copy_anns, src_batch, dst_batch))
+            for task in as_completed(upload_anns_tasks):
+                src_batch, dst_batch = task.result()
+                replace_tasks.append(local_executor.submit(_maybe_replace, src_batch, dst_batch))
+        else:
+            replace_tasks.append(
+                local_executor.submit(_maybe_replace, src_image_infos, uploaded_images_infos)
+            )
+
+    for task in as_completed(replace_tasks):
+        src, dst = task.result()
         if progress_cb is not None:
-            progress_cb(uploaded)
-    return dst_image_infos
+            progress_cb(len(src))
+
+    return [src_id_to_dst_image_info[info.id] for info in image_infos]
 
 
 def clone_videos_with_annotations(
@@ -321,7 +347,7 @@ def clone_volumes_with_annotations(
         )
         if to_remove:
             rm_ids = [info.id for info in existing if info.name in to_remove]
-            run_in_executor(api.image.remove_batch, rm_ids)
+            api.image.remove_batch(rm_ids)
         if to_rename:
             rename_tasks = []
             for dst_info in dst_volumes:
@@ -336,12 +362,12 @@ def clone_volumes_with_annotations(
                 ]
         return {src.id: dst for src, dst in zip(infos, dst_volumes)}
 
-    def _copy_anns(src_ids, dst_ids):
+    def _copy_anns(src_ids, dst_ids, dst_infos):
         ann_jsons = api.volume.annotation.download_bulk(src_dataset_id, src_ids)
-        for ann_json, dst_id in zip(ann_jsons, dst_ids):
+        for ann_json, dst_id, dst_info in zip(ann_jsons, dst_ids, dst_infos):
             key_id_map = sly.KeyIdMap()
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
-            api.volume.annotation.append(dst_id, ann, key_id_map)
+            api.volume.annotation.append(dst_id, ann, key_id_map, volume_info=dst_info)
             if progress_cb is not None:
                 progress_cb()
         return len(src_ids)
@@ -361,6 +387,7 @@ def clone_volumes_with_annotations(
                     _copy_anns,
                     src_ids_batch,
                     [src_to_dst_map[src_id].id for src_id in src_to_dst_map],
+                    [src_to_dst_map[src_id] for src_id in src_ids_batch],
                 )
             )
         elif progress_cb is not None:
