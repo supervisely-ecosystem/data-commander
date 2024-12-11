@@ -221,10 +221,10 @@ def clone_videos_with_annotations(
         return []
 
     existing = run_in_executor(api.video.get_list, dst_dataset_id)
-    existing_names = {info.name for info in existing}
+    existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         len_before = len(video_infos)
-        video_infos = [info for info in video_infos if info.name not in existing_names]
+        video_infos = [info for info in video_infos if info.name not in existing]
         if progress_cb is not None:
             progress_cb(len_before - len(video_infos))
 
@@ -325,9 +325,9 @@ def clone_volumes_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.volume_api.VolumeInfo]:
     existing = run_in_executor(api.volume.get_list, dst_dataset_id)
-    existing_names = {info.name for info in existing}
+    existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        volume_infos = [info for info in volume_infos if info.name not in existing_names]
+        volume_infos = [info for info in volume_infos if info.name not in existing]
 
     if len(volume_infos) == 0:
         return []
@@ -430,9 +430,9 @@ def clone_pointclouds_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing = api.pointcloud.get_list(dst_dataset_id)
-    existing_names = {info.name for info in existing}
+    existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        pointcloud_infos = [info for info in pointcloud_infos if info.name not in existing_names]
+        pointcloud_infos = [info for info in pointcloud_infos if info.name not in existing]
 
     if len(pointcloud_infos) == 0:
         return []
@@ -520,10 +520,10 @@ def clone_pointcloud_episodes_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing = api.pointcloud_episode.get_list(dst_dataset_id)
-    existing_names = {info.name for info in existing}
+    existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
-            info for info in pointcloud_episode_infos if info.name not in existing_names
+            info for info in pointcloud_episode_infos if info.name not in existing
         ]
 
     if len(pointcloud_episode_infos) == 0:
