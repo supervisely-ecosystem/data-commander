@@ -731,7 +731,7 @@ def create_dataset_recursively(
                         name=dataset_info.name,
                         parent_id=dst_dataset_id,
                     )
-                    created_info = replace_dataset(existing, dataset_info)
+                    created_info = run_in_executor(replace_dataset, existing, dataset_info)
             # to update items count
             created_info = run_in_executor(api.dataset.get_info_by_id, created_id)
             sly.logger.info(
