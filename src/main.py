@@ -542,7 +542,7 @@ def clone_pointcloud_episodes_with_annotations(
         to_remove = []
         to_rename = {}
         for i, name in enumerate(names):
-            if name in existing_names:
+            if name in existing:
                 if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
                     names[i] = (
                         ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
