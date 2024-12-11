@@ -133,7 +133,7 @@ def clone_images_with_annotations(
             infos=infos,
             skip_validation=True,  # TODO: check if it is needed
         )
-        return (infos, uploaded)
+        return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
         src_ann_infos = api.annotation.download_batch(
@@ -244,7 +244,7 @@ def clone_videos_with_annotations(
             metas=metas,
             infos=infos,
         )
-        return (infos, uploaded)
+        return infos, uploaded
 
     def _copy_anns(src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]):
         anns_jsons = run_in_executor(
@@ -344,7 +344,7 @@ def clone_volumes_with_annotations(
             hashes=hashes,
             metas=metas,
         )
-        return (infos, uploaded)
+        return infos, uploaded
 
     def _copy_anns(
         src: List[sly.api.volume_api.VolumeInfo], dst: List[sly.api.volume_api.VolumeInfo]
@@ -444,9 +444,11 @@ def clone_pointclouds_with_annotations(
             hashes=hashes,
             metas=metas,
         )
-        return (infos, uploaded)
+        return infos, uploaded
 
-    def _copy_anns(src_ids, dst_ids):
+    def _copy_anns(src, dst):
+        src_ids = [info.id for info in src]
+        dst_ids = [info.id for info in dst]
         ann_jsons = run_in_executor(
             api.pointcloud.annotation.download_bulk, src_dataset_id, src_ids
         )
@@ -457,7 +459,7 @@ def clone_pointclouds_with_annotations(
             tasks.append(executor.submit(api.pointcloud.annotation.append, dst_id, ann, key_id_map))
         for task in as_completed(tasks):
             task.result()
-        return len(src_ids)
+        return src, dst
 
     def _maybe_copy_anns_and_replace(src, dst):
         if options[JSONKEYS.CLONE_ANNOTATIONS]:
