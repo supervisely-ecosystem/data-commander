@@ -796,6 +796,8 @@ def create_project(
 
 def merge_project_meta(src_project_id, dst_project_id):
     src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
+    if src_project_id == dst_project_id:
+        return src_project_meta
     dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id))
     changed = False
     for obj_class in src_project_meta.obj_classes:
@@ -1330,30 +1332,52 @@ def copy_or_move(state: Dict, move: bool = False):
             progress.iter_done()
         progress.iter_done_report()
 
-    items_to_create = 0
-    created_datasets = []
-    item_type = items[0][JSONKEYS.TYPE]
-    if item_type == JSONKEYS.PROJECT:
-        items_project_infos = []
-        for item in items:
-            src_project_id = item[JSONKEYS.ID]
-            src_project_info = api.project.get_info_by_id(src_project_id)
-            if src_project_info is None:
-                sly.logger.error("Project with id=%d not found", src_project_id)
-                raise ValueError("Project not found")
-            items_project_infos.append(src_project_info)
-            items_to_create += src_project_info.items_count
-        progress.total = items_to_create
-        progress.report_progress()
-        sly.logger.info("Total items: %d", items_to_create)
+    project_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT]
+    dataset_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET]
+    image_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.IMAGE]
 
-        existing_projects = None
-        if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] != JSONKEYS.CONFLICT_RENAME:
-            existing_projects = api.project.get_list(dst_workspace_id)
+    items_to_create = 0
+    src_project_infos: Dict[int, sly.ProjectInfo] = {}
+    for item in project_items:
+        project_id = item[JSONKEYS.ID]
+        project_info = api.project.get_info_by_id(project_id, raise_error=True)
+        src_project_infos[project_id] = project_info
+        items_to_create += project_info.items_count
+        # project meta is merged in the copy function
+    existing_projects = None
+    if (
+        len(project_items) > 0
+        and options[JSONKEYS.CONFLICT_RESOLUTION_MODE] != JSONKEYS.CONFLICT_RENAME
+    ):
+        existing_projects = api.project.get_list(dst_workspace_id)
+
+    project_meta = None
+    datasets_tree = None
+    if len(dataset_items) > 0:
+        src_project_infos.setdefault(
+            src_project_id, api.project.get_info_by_id(src_project_id, raise_error=True)
+        )
+        src_dataset_ids = [item[JSONKEYS.ID] for item in dataset_items]
+        datasets_tree = api.dataset.get_tree(src_project_id)
+        datasets_tree = _find_tree(datasets_tree, src_dataset_ids)
+        items_to_create += _count_items_in_tree(datasets_tree)
+        project_meta = merge_project_meta(src_project_id, dst_project_id)
+
+    if len(image_items) > 0:
+        items_to_create += len(image_items)
+        if project_meta is None:
+            project_meta = merge_project_meta(src_project_id, dst_project_id)
+
+    progress.total = items_to_create
+    progress.report_progress()
+    sly.logger.info("Total items: %d", items_to_create)
+
+    if len(project_items) > 0:
         f = move_project if move else copy_project
         with ThreadPoolExecutor() as local_executor:
             tasks = []
-            for item_project_info in items_project_infos:
+            for item in project_items:
+                item_project_info = src_project_infos[item[JSONKEYS.ID]]
                 tasks.append(
                     local_executor.submit(
                         f,
@@ -1367,22 +1391,11 @@ def copy_or_move(state: Dict, move: bool = False):
                     )
                 )
             for task in as_completed(tasks):
-                created_datasets.extend(task.result())
-
-    elif item_type == JSONKEYS.DATASET:
-        src_project_info = api.project.get_info_by_id(src_project_id)
-        project_type = src_project_info.type
-        project_meta = merge_project_meta(src_project_id, dst_project_id)
-        src_dataset_ids = [item[JSONKEYS.ID] for item in items]
-        datasets_tree = api.dataset.get_tree(src_project_id)
-        datasets_tree = _find_tree(datasets_tree, src_dataset_ids)
-
-        items_to_create = _count_items_in_tree(datasets_tree)
-        progress.total = items_to_create
-        progress.report_progress()
-        sly.logger.info("Total items: %d", items_to_create)
+                task.result()
+    if len(dataset_items) > 0:
+        project_type = src_project_infos[src_project_id].type
         if move:
-            created_datasets = move_datasets_tree(
+            move_datasets_tree(
                 datasets_tree,
                 project_type=project_type,
                 project_meta=project_meta,
@@ -1392,7 +1405,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 progress_cb=_progress_cb,
             )
         else:
-            created_datasets = copy_dataset_tree(
+            copy_dataset_tree(
                 datasets_tree,
                 project_type=project_type,
                 project_meta=project_meta,
@@ -1401,22 +1414,14 @@ def copy_or_move(state: Dict, move: bool = False):
                 options=options,
                 progress_cb=_progress_cb,
             )
-    elif item_type == JSONKEYS.IMAGE:
-        items_to_create = len(items)
-        progress.total = items_to_create
-        progress.report_progress()
-        sly.logger.info("Total items: %d", items_to_create)
-        src_project_info = api.project.get_info_by_id(src_project_id)
-        if dst_project_id == src_project_id:
-            project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
-        else:
-            project_meta = merge_project_meta(src_project_id, dst_project_id)
+    if len(image_items) > 0:
+        project_type = src_project_infos[src_project_id].type
         if move:
             if src_dataset_id == dst_dataset_id:
                 return
             move_items_to_dataset(
-                items,
-                src_project_info.type,
+                image_items,
+                project_type,
                 src_dataset_id,
                 dst_dataset_id,
                 project_meta,
@@ -1425,16 +1430,14 @@ def copy_or_move(state: Dict, move: bool = False):
             )
         else:
             copy_items_to_dataset(
-                items,
-                src_project_info.type,
+                image_items,
+                project_type,
                 src_dataset_id,
                 dst_dataset_id,
                 project_meta,
                 options,
                 _progress_cb,
             )
-    else:
-        raise ValueError(f"Unsupported item type: {item_type}")
 
 
 def main():
