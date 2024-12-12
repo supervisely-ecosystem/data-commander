@@ -1,7 +1,7 @@
 {
     "version": "2.0.0",
     "name": "Data Commander",
-    "description": "",
+    "description": "Manage your projects with ease",
     "type": "app",
     "headless": true,
     "main_script": "src/main.py",
