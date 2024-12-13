@@ -643,23 +643,23 @@ def clone_items(
 ):
     if project_type == str(sly.ProjectType.IMAGES):
         if src_infos is None:
-            src_infos = run_in_executor(api.image.get_list(src_dataset_id))
+            src_infos = run_in_executor(api.image.get_list, src_dataset_id)
         clone_f = clone_images_with_annotations
     elif project_type == str(sly.ProjectType.VIDEOS):
         if src_infos is None:
-            src_infos = run_in_executor(api.video.get_list(src_dataset_id))
+            src_infos = run_in_executor(api.video.get_list, src_dataset_id)
         clone_f = clone_videos_with_annotations
     elif project_type == str(sly.ProjectType.VOLUMES):
         if src_infos is None:
-            src_infos = run_in_executor(api.volume.get_list(src_dataset_id))
+            src_infos = run_in_executor(api.volume.get_list, src_dataset_id)
         clone_f = clone_volumes_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUDS):
         if src_infos is None:
-            src_infos = run_in_executor(api.pointcloud.get_list(src_dataset_id))
+            src_infos = run_in_executor(api.pointcloud.get_list, src_dataset_id)
         clone_f = clone_pointclouds_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUD_EPISODES):
         if src_infos is None:
-            src_infos = run_in_executor(api.pointcloud_episode.get_list(src_dataset_id))
+            src_infos = run_in_executor(api.pointcloud_episode.get_list, src_dataset_id)
         clone_f = clone_pointcloud_episodes_with_annotations
     else:
         raise NotImplementedError(
