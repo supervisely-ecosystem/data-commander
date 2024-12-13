@@ -643,23 +643,23 @@ def clone_items(
 ):
     if project_type == str(sly.ProjectType.IMAGES):
         if src_infos is None:
-            src_infos = api.image.get_list(src_dataset_id)
+            src_infos = run_in_executor(api.image.get_list(src_dataset_id))
         clone_f = clone_images_with_annotations
     elif project_type == str(sly.ProjectType.VIDEOS):
         if src_infos is None:
-            src_infos = api.video.get_list(src_dataset_id)
+            src_infos = run_in_executor(api.video.get_list(src_dataset_id))
         clone_f = clone_videos_with_annotations
     elif project_type == str(sly.ProjectType.VOLUMES):
         if src_infos is None:
-            src_infos = api.volume.get_list(src_dataset_id)
+            src_infos = run_in_executor(api.volume.get_list(src_dataset_id))
         clone_f = clone_volumes_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUDS):
         if src_infos is None:
-            src_infos = api.pointcloud.get_list(src_dataset_id)
+            src_infos = run_in_executor(api.pointcloud.get_list(src_dataset_id))
         clone_f = clone_pointclouds_with_annotations
     elif project_type == str(sly.ProjectType.POINT_CLOUD_EPISODES):
         if src_infos is None:
-            src_infos = api.pointcloud_episode.get_list(src_dataset_id)
+            src_infos = run_in_executor(api.pointcloud_episode.get_list(src_dataset_id))
         clone_f = clone_pointcloud_episodes_with_annotations
     else:
         raise NotImplementedError(
@@ -705,7 +705,7 @@ def create_dataset_recursively(
         if dataset_info is not None:
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
                 existing = run_in_executor(
-                    api.dataset.get_list, dst_project_id, parent_id=dst_dataset_id
+                    api.dataset.get_list, dst_project_id, parent_id=dst_parent_id
                 )
                 if any(ds.name == dataset_info.name for ds in existing):
                     return
