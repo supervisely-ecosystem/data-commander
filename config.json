@@ -6,5 +6,6 @@
     "headless": true,
     "main_script": "src/main.py",
     "docker_image": "supervisely/base-py-sdk:6.73.252",
-    "instance_version": "6.12.12"
+    "instance_version": "6.12.12",
+    "system": true
 }
