@@ -1364,6 +1364,9 @@ def copy_or_move(state: Dict, move: bool = False):
         project_meta = merge_project_meta(src_project_id, dst_project_id)
 
     if len(image_items) > 0:
+        src_project_infos.setdefault(
+            src_project_id, api.project.get_info_by_id(src_project_id, raise_error=True)
+        )
         items_to_create += len(image_items)
         if project_meta is None:
             project_meta = merge_project_meta(src_project_id, dst_project_id)
