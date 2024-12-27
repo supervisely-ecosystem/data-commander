@@ -119,41 +119,25 @@ def clone_images_with_annotations(
 
     def _copy_imgs(
         names,
-        ids,
-        metas,
         infos,
     ):
-        uploaded = api.image.upload_ids(
-            dst_dataset_id,
-            names=names,
-            ids=ids,
-            metas=metas,
-            batch_size=UPLOAD_IMAGES_BATCH_SIZE,
-            force_metadata_for_links=False,
-            infos=infos,
-            skip_validation=True,  # TODO: check if it is needed
+        uploaded = api_utils.images_bulk_add(
+            api, dst_dataset_id, names, infos, perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE]
         )
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
-        src_ann_infos = api.annotation.download_batch(
-            src_dataset_id, [info.id for info in src], force_metadata_for_links=False
-        )  # not sure that the order is perserved
-        src_id_to_dst_id = {s.id: d.id for s, d in zip(src, dst)}
-        api.annotation.upload_jsons(
-            [src_id_to_dst_id[info.image_id] for info in src_ann_infos],
-            [info.annotation for info in src_ann_infos],
-            skip_bounds_validation=True,
+        api.annotation.copy_batch_by_ids(
+            [i.id for i in src],
+            [i.id for i in dst],
+            save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
         )
         return src, dst
 
-    src_dataset_id = image_infos[0].dataset_id
     to_rename = {}  # {new_name: old_name}
     upload_images_tasks = []
     for src_image_infos_batch in sly.batched(image_infos, UPLOAD_IMAGES_BATCH_SIZE):
         names = [info.name for info in src_image_infos_batch]
-        ids = [info.id for info in src_image_infos_batch]
-        metas = [info.meta for info in src_image_infos_batch]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
 
         if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
@@ -171,8 +155,6 @@ def clone_images_with_annotations(
             executor.submit(
                 _copy_imgs,
                 names=names,
-                ids=ids,
-                metas=metas,
                 infos=src_image_infos_batch,
             )
         )
