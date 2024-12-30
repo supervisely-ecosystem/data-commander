@@ -119,41 +119,34 @@ def clone_images_with_annotations(
 
     def _copy_imgs(
         names,
-        ids,
-        metas,
         infos,
     ):
-        uploaded = api.image.upload_ids(
-            dst_dataset_id,
-            names=names,
-            ids=ids,
-            metas=metas,
-            batch_size=UPLOAD_IMAGES_BATCH_SIZE,
-            force_metadata_for_links=False,
-            infos=infos,
-            skip_validation=True,  # TODO: check if it is needed
+        uploaded = api_utils.images_bulk_add(
+            api, dst_dataset_id, names, infos, perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE]
         )
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
-        src_ann_infos = api.annotation.download_batch(
-            src_dataset_id, [info.id for info in src], force_metadata_for_links=False
-        )  # not sure that the order is perserved
-        src_id_to_dst_id = {s.id: d.id for s, d in zip(src, dst)}
-        api.annotation.upload_jsons(
-            [src_id_to_dst_id[info.image_id] for info in src_ann_infos],
-            [info.annotation for info in src_ann_infos],
-            skip_bounds_validation=True,
-        )
+        try:
+            api.annotation.copy_batch_by_ids(
+                [i.id for i in src],
+                [i.id for i in dst],
+                save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
+            )
+        except Exception as e:
+            if "Some users are not members of the destination group" in str(e):
+                raise ValueError(
+                    "Unable to copy annotations. Annotation creator is not a member of the destination team."
+                ) from e
+            else:
+                raise e
+
         return src, dst
 
-    src_dataset_id = image_infos[0].dataset_id
     to_rename = {}  # {new_name: old_name}
     upload_images_tasks = []
     for src_image_infos_batch in sly.batched(image_infos, UPLOAD_IMAGES_BATCH_SIZE):
         names = [info.name for info in src_image_infos_batch]
-        ids = [info.id for info in src_image_infos_batch]
-        metas = [info.meta for info in src_image_infos_batch]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
 
         if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
@@ -171,8 +164,6 @@ def clone_images_with_annotations(
             executor.submit(
                 _copy_imgs,
                 names=names,
-                ids=ids,
-                metas=metas,
                 infos=src_image_infos_batch,
             )
         )
@@ -643,7 +634,7 @@ def clone_items(
 ):
     if project_type == str(sly.ProjectType.IMAGES):
         if src_infos is None:
-            src_infos = run_in_executor(api.image.get_list, src_dataset_id)
+            src_infos = run_in_executor(api_utils.images_get_list, api, src_dataset_id)
         clone_f = clone_images_with_annotations
     elif project_type == str(sly.ProjectType.VIDEOS):
         if src_infos is None:
@@ -696,6 +687,7 @@ def create_dataset_recursively(
     )
     tasks_queue = Queue()
     local_executor = ThreadPoolExecutor()
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
 
     def _create_rec(
         dataset_info: sly.DatasetInfo, children: Dict[sly.DatasetInfo, Dict], dst_parent_id: int
@@ -710,12 +702,16 @@ def create_dataset_recursively(
                 if any(ds.name == dataset_info.name for ds in existing):
                     return
             created_info = run_in_executor(
-                api.dataset.create,
+                api_utils.create_dataset,
+                api,
                 dst_project_id,
                 dataset_info.name,
                 dataset_info.description,
                 change_name_if_conflict=True,
                 parent_id=dst_parent_id,
+                created_at=dataset_info.created_at if perserve_date else None,
+                updated_at=dataset_info.updated_at if perserve_date else None,
+                created_by=dataset_info.created_by if perserve_date else None,
             )
 
             created_id = created_info.id
@@ -771,9 +767,11 @@ def create_project(
 ) -> Tuple[sly.ProjectInfo, sly.ProjectMeta]:
     created_at = None
     created_by = None
+    updated_at = None
     if options.get(JSONKEYS.PRESERVE_SRC_DATE, False):
         created_at = src_project_info.created_at
         created_by = src_project_info.created_by_id
+        updated_at = src_project_info.updated_at
     dst_project_info = api_utils.create_project(
         api,
         dst_workspace_id,
@@ -785,6 +783,7 @@ def create_project(
         readme=src_project_info.readme,
         change_name_if_conflict=True,
         created_at=created_at,
+        updated_at=updated_at,
         created_by=created_by,
     )
     sly.logger.info(
@@ -905,6 +904,7 @@ def copy_project_with_replace(
         )
         progress_cb(src_project_info.items_count)
         return []
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if datasets_tree is None:
@@ -919,6 +919,9 @@ def copy_project_with_replace(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         for ds, children in datasets_tree.items():
@@ -983,6 +986,7 @@ def copy_project_with_skip(
     existing_projects=None,
     datasets_tree=None,
 ):
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
@@ -1001,6 +1005,9 @@ def copy_project_with_skip(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1082,6 +1089,7 @@ def copy_project(
             existing_projects,
             datasets_tree,
         )
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
@@ -1093,6 +1101,9 @@ def copy_project(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1237,7 +1248,7 @@ def move_datasets_tree(
 def get_item_infos(dataset_id: int, item_ids: List[int], project_type: str):
     filters = [{"field": "id", "operator": "in", "value": item_ids}]
     if project_type == str(sly.ProjectType.IMAGES):
-        return api.image.get_info_by_id_batch(item_ids, force_metadata_for_links=False)
+        return api_utils.images_get_list(api, dataset_id, item_ids)
     if project_type == str(sly.ProjectType.VIDEOS):
         return api.video.get_info_by_id_batch(item_ids)
     if project_type == str(sly.ProjectType.VOLUMES):
