@@ -758,9 +758,11 @@ def create_project(
 ) -> Tuple[sly.ProjectInfo, sly.ProjectMeta]:
     created_at = None
     created_by = None
+    updated_at = None
     if options.get(JSONKEYS.PRESERVE_SRC_DATE, False):
         created_at = src_project_info.created_at
         created_by = src_project_info.created_by_id
+        updated_at = src_project_info.updated_at
     dst_project_info = api_utils.create_project(
         api,
         dst_workspace_id,
@@ -772,6 +774,7 @@ def create_project(
         readme=src_project_info.readme,
         change_name_if_conflict=True,
         created_at=created_at,
+        updated_at=updated_at,
         created_by=created_by,
     )
     sly.logger.info(

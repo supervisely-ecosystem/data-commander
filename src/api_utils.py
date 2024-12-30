@@ -16,6 +16,7 @@ def create_project(
     readme: str = None,
     change_name_if_conflict: Optional[bool] = False,
     created_at: Optional[str] = None,
+    updated_at: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> sly.Project:
 
@@ -38,6 +39,8 @@ def create_project(
         data[ApiField.README] = readme
     if created_at is not None:
         data[ApiField.CREATED_AT] = created_at
+    if updated_at is not None:
+        data[ApiField.UPDATED_AT] = updated_at
     if created_by is not None:
         data[ApiField.CREATED_BY_ID[0][0]] = created_by
     response = api.post("projects.add", data)
