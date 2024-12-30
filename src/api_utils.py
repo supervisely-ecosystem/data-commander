@@ -50,6 +50,22 @@ def get_project_activity(api: sly.Api, project_id: int):
     return df
 
 
+def images_get_list(api, dataset_id):
+    api_fields = [
+        ApiField.ID,
+        ApiField.NAME,
+        ApiField.HASH,
+        ApiField.DATASET_ID,
+        ApiField.CREATED_AT,
+        ApiField.UPDATED_AT,
+        ApiField.META,
+        ApiField.PATH_ORIGINAL,
+        ApiField.CREATED_BY_ID[0][0],
+    ]
+    img_infos = api.image.get_list(dataset_id, fields=api_fields)
+    return img_infos
+
+
 def images_bulk_add(
     api: sly.Api,
     dataset_id: int,
@@ -66,7 +82,7 @@ def images_bulk_add(
         if perserve_dates:
             img_json[ApiField.CREATED_AT] = img_info.created_at
             img_json[ApiField.UPDATED_AT] = img_info.updated_at
-            # img_json[ApiField.CREATED_BY_ID[0][0]] = img_info.
+            img_json[ApiField.CREATED_BY_ID[0][0]] = img_info.created_by
         if img_info.link is not None:
             img_json[ApiField.LINK] = img_info.link
         elif img_info.hash is not None:
