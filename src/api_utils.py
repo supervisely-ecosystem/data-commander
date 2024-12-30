@@ -149,15 +149,23 @@ def images_bulk_add(
             img_json[ApiField.HASH] = img_info.hash
         img_data.append(img_json)
 
-    response = api.post(
-        "images.bulk.add",
-        {
-            ApiField.DATASET_ID: dataset_id,
-            ApiField.IMAGES: img_data,
-            ApiField.FORCE_METADATA_FOR_LINKS: False,
-            ApiField.SKIP_VALIDATION: True,
-        },
-    )
+    try:
+        response = api.post(
+            "images.bulk.add",
+            {
+                ApiField.DATASET_ID: dataset_id,
+                ApiField.IMAGES: img_data,
+                ApiField.FORCE_METADATA_FOR_LINKS: False,
+                ApiField.SKIP_VALIDATION: True,
+            },
+        )
+    except Exception as e:
+        if "Some users are not members of the destination group" in str(e):
+            raise ValueError(
+                "Unable to add images. Image creator is not a member of the destination team."
+            ) from e
+        else:
+            raise e
 
     results = []
     for info_json in response.json():
