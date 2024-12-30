@@ -1239,7 +1239,7 @@ def move_datasets_tree(
 def get_item_infos(dataset_id: int, item_ids: List[int], project_type: str):
     filters = [{"field": "id", "operator": "in", "value": item_ids}]
     if project_type == str(sly.ProjectType.IMAGES):
-        return api.image.get_info_by_id_batch(item_ids, force_metadata_for_links=False)
+        return api_utils.images_get_list(api, dataset_id, item_ids)
     if project_type == str(sly.ProjectType.VIDEOS):
         return api.video.get_info_by_id_batch(item_ids)
     if project_type == str(sly.ProjectType.VOLUMES):

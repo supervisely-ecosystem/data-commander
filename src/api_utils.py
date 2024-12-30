@@ -61,7 +61,7 @@ def get_project_activity(api: sly.Api, project_id: int):
     return df
 
 
-def images_get_list(api, dataset_id):
+def images_get_list(api: sly.Api, dataset_id, image_ids=None):
     api_fields = [
         ApiField.ID,
         ApiField.NAME,
@@ -73,7 +73,10 @@ def images_get_list(api, dataset_id):
         ApiField.PATH_ORIGINAL,
         ApiField.CREATED_BY_ID[0][0],
     ]
-    img_infos = api.image.get_list(dataset_id, fields=api_fields)
+    filters = None
+    if image_ids is not None:
+        filters = [{"field": ApiField.ID, "operator": "in", "value": image_ids}]
+    img_infos = api.image.get_list(dataset_id, filters=filters, fields=api_fields, force_metadata_for_links=False)
     return img_infos
 
 
@@ -106,10 +109,18 @@ def create_dataset(
         data[ApiField.UPDATED_AT] = updated_at
     if created_by is not None:
         data[ApiField.CREATED_BY_ID[0][0]] = created_by
-    response = api.post(
-        "datasets.add",
-        data,
-    )
+    try:
+        response = api.post(
+            "datasets.add",
+            data,
+        )
+    except Exception as e:
+        if "Some users not found in team" in str(e):
+            raise ValueError(
+                "Unable to create a dataset. Dataset creator is not a member of the destination team."
+            ) from e
+        else:
+            raise e
     return api.dataset._convert_json_info(response.json())
 
 
@@ -136,15 +147,18 @@ def images_bulk_add(
             img_json[ApiField.HASH] = img_info.hash
         img_data.append(img_json)
 
-    response = api.post(
-        "images.bulk.add",
-        {
-            ApiField.DATASET_ID: dataset_id,
-            ApiField.IMAGES: img_data,
-            ApiField.FORCE_METADATA_FOR_LINKS: False,
-            ApiField.SKIP_VALIDATION: True,
-        },
-    )
+    try:
+        response = api.post(
+            "images.bulk.add",
+            {
+                ApiField.DATASET_ID: dataset_id,
+                ApiField.IMAGES: img_data,
+                ApiField.FORCE_METADATA_FOR_LINKS: False,
+                ApiField.SKIP_VALIDATION: True,
+            },
+        )
+    except Exception as e:
+
     results = []
     for info_json in response.json():
         info_json_copy = info_json.copy()
