@@ -678,6 +678,7 @@ def create_dataset_recursively(
     )
     tasks_queue = Queue()
     local_executor = ThreadPoolExecutor()
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
 
     def _create_rec(
         dataset_info: sly.DatasetInfo, children: Dict[sly.DatasetInfo, Dict], dst_parent_id: int
@@ -692,12 +693,16 @@ def create_dataset_recursively(
                 if any(ds.name == dataset_info.name for ds in existing):
                     return
             created_info = run_in_executor(
-                api.dataset.create,
+                api_utils.create_dataset,
+                api,
                 dst_project_id,
                 dataset_info.name,
                 dataset_info.description,
                 change_name_if_conflict=True,
                 parent_id=dst_parent_id,
+                created_at=dataset_info.created_at if perserve_date else None,
+                updated_at=dataset_info.updated_at if perserve_date else None,
+                created_by=dataset_info.created_by if perserve_date else None,
             )
 
             created_id = created_info.id
@@ -887,6 +892,7 @@ def copy_project_with_replace(
         )
         progress_cb(src_project_info.items_count)
         return []
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if datasets_tree is None:
@@ -901,6 +907,9 @@ def copy_project_with_replace(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         for ds, children in datasets_tree.items():
@@ -965,6 +974,7 @@ def copy_project_with_skip(
     existing_projects=None,
     datasets_tree=None,
 ):
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
@@ -983,6 +993,9 @@ def copy_project_with_skip(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1064,6 +1077,7 @@ def copy_project(
             existing_projects,
             datasets_tree,
         )
+    perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
@@ -1075,6 +1089,9 @@ def copy_project(
             src_project_info.description,
             change_name_if_conflict=True,
             parent_id=dst_dataset_id,
+            created_at=src_project_info.created_at if perserve_date else None,
+            updated_at=src_project_info.updated_at if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1427,9 +1444,9 @@ def copy_or_move(state: Dict, move: bool = False):
 
 def main():
     state = extract_state_from_env()
+    state[JSONKEYS.OPTIONS][JSONKEYS.PRESERVE_SRC_DATE] = True
     sly.logger.info("State:", extra=state)
     action = state[JSONKEYS.ACTION]
-    state[JSONKEYS.PRESERVE_SRC_DATE] = True
     if action == "move":
         copy_or_move(state, move=True)
     elif action == "copy":

@@ -66,6 +66,42 @@ def images_get_list(api, dataset_id):
     return img_infos
 
 
+def create_dataset(
+    api: sly.Api,
+    project_id: int,
+    name: str,
+    description: Optional[str] = "",
+    change_name_if_conflict: Optional[bool] = False,
+    parent_id: Optional[int] = None,
+    created_at: Optional[str] = None,
+    updated_at: Optional[str] = None,
+    created_by: Optional[int] = None,
+):
+    effective_name = api.dataset._get_effective_new_name(
+        project_id=project_id,
+        name=name,
+        change_name_if_conflict=change_name_if_conflict,
+        parent_id=parent_id,
+    )
+    data = {
+        ApiField.PROJECT_ID: project_id,
+        ApiField.NAME: effective_name,
+        ApiField.DESCRIPTION: description,
+        ApiField.PARENT_ID: parent_id,
+    }
+    if created_at is not None:
+        data[ApiField.CREATED_AT] = created_at
+    if updated_at is not None:
+        data[ApiField.UPDATED_AT] = updated_at
+    if created_by is not None:
+        data[ApiField.CREATED_BY_ID[0][0]] = created_by
+    response = api.post(
+        "datasets.add",
+        data,
+    )
+    return api.dataset._convert_json_info(response.json())
+
+
 def images_bulk_add(
     api: sly.Api,
     dataset_id: int,
