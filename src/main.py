@@ -625,7 +625,7 @@ def clone_items(
 ):
     if project_type == str(sly.ProjectType.IMAGES):
         if src_infos is None:
-            src_infos = run_in_executor(api_utils.images_get_list, src_dataset_id)
+            src_infos = run_in_executor(api_utils.images_get_list, api, src_dataset_id)
         clone_f = clone_images_with_annotations
     elif project_type == str(sly.ProjectType.VIDEOS):
         if src_infos is None:
