@@ -76,7 +76,9 @@ def images_get_list(api: sly.Api, dataset_id, image_ids=None):
     filters = None
     if image_ids is not None:
         filters = [{"field": ApiField.ID, "operator": "in", "value": image_ids}]
-    img_infos = api.image.get_list(dataset_id, filters=filters, fields=api_fields, force_metadata_for_links=False)
+    img_infos = api.image.get_list(
+        dataset_id, filters=filters, fields=api_fields, force_metadata_for_links=False
+    )
     return img_infos
 
 
@@ -147,17 +149,15 @@ def images_bulk_add(
             img_json[ApiField.HASH] = img_info.hash
         img_data.append(img_json)
 
-    try:
-        response = api.post(
-            "images.bulk.add",
-            {
-                ApiField.DATASET_ID: dataset_id,
-                ApiField.IMAGES: img_data,
-                ApiField.FORCE_METADATA_FOR_LINKS: False,
-                ApiField.SKIP_VALIDATION: True,
-            },
-        )
-    except Exception as e:
+    response = api.post(
+        "images.bulk.add",
+        {
+            ApiField.DATASET_ID: dataset_id,
+            ApiField.IMAGES: img_data,
+            ApiField.FORCE_METADATA_FOR_LINKS: False,
+            ApiField.SKIP_VALIDATION: True,
+        },
+    )
 
     results = []
     for info_json in response.json():
