@@ -1429,6 +1429,7 @@ def main():
     state = extract_state_from_env()
     sly.logger.info("State:", extra=state)
     action = state[JSONKEYS.ACTION]
+    state[JSONKEYS.PRESERVE_SRC_DATE] = True
     if action == "move":
         copy_or_move(state, move=True)
     elif action == "copy":
