@@ -127,11 +127,20 @@ def clone_images_with_annotations(
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
-        api.annotation.copy_batch_by_ids(
-            [i.id for i in src],
-            [i.id for i in dst],
-            save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
-        )
+        try:
+            api.annotation.copy_batch_by_ids(
+                [i.id for i in src],
+                [i.id for i in dst],
+                save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
+            )
+        except Exception as e:
+            if "Some users are not members of the destination group" in str(e):
+                raise ValueError(
+                    "Unable to copy annotations. Annotation creator is not a member of the destination team."
+                ) from e
+            else:
+                raise e
+
         return src, dst
 
     to_rename = {}  # {new_name: old_name}
