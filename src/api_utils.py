@@ -43,7 +43,15 @@ def create_project(
         data[ApiField.UPDATED_AT] = updated_at
     if created_by is not None:
         data[ApiField.CREATED_BY_ID[0][0]] = created_by
-    response = api.post("projects.add", data)
+    try:
+        response = api.post("projects.add", data)
+    except Exception as e:
+        if "Some users not found in team" in str(e):
+            raise ValueError(
+                "Unable to create a project. Project creator is not a member of the destination team."
+            ) from e
+        else:
+            raise e
     return api.project._convert_json_info(response.json())
 
 
