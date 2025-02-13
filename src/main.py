@@ -3,10 +3,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from datetime import datetime
 from queue import Queue
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union, Optional, Any
 from dotenv import load_dotenv
-
+from supervisely import logger
 import supervisely as sly
+from supervisely import tqdm_sly
 
 
 import src.api_utils as api_utils
@@ -46,13 +47,195 @@ class JSONKEYS:
     VOLUME = "volume"
     POINTCLOUD = "pointcloud"
     POINTCLOUD_EPISODE = "pointcloud_episode"
+    REVIEW_STATUS = "reviewStatus"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    REVIEWED = "reviewed"
+    COMPLETED = "completed"
+    DONE = "done"
+    NONE = "none"
+    JOB = "labelingJob"
+    QUEUE = "labelingQueue"
+    PRESERVE_SRC_STRUCTURE = "preserveStructure"
+
+
+class Destination:
+    class Level:
+        TEAM = "team"
+        WORKSPACE = "workspace"
+        PROJECT = "project"
+        DATASET = "dataset"
+
+    def __init__(
+        self,
+        team_id: int,
+        team_name: str,
+        workspace_id: int,
+        workspace_name: str,
+        project_id: int,
+        project_name: str,
+        project_type: str,
+        dataset_id: int,
+        dataset_name: str,
+    ):
+        self.team_id = team_id
+        self.team_name = team_name
+        self.workspace_id = workspace_id
+        self.workspace_name = workspace_name
+        self.project_id = project_id
+        self.project_name = project_name
+        self.project_type = project_type
+        self.dataset_id = dataset_id
+        self.dataset_name = dataset_name
+        self.level = self.detect_level()
+        self.same_src_structure = False
+        self.info = self.get_info()
+
+    def get_info(self):
+        if self.level == Destination.Level.DATASET:
+            return api.dataset.get_info_by_id(self.dataset_id)
+        if self.level == Destination.Level.PROJECT:
+            return api.project.get_info_by_id(self.project_id)
+        if self.level == Destination.Level.WORKSPACE:
+            return api.workspace.get_info_by_id(self.workspace_id)
+        return None
+
+    def detect_level(self):
+        if self.dataset_id is not None:
+            return Destination.Level.DATASET
+        if self.project_id is not None:
+            return Destination.Level.PROJECT
+        if self.workspace_id is not None:
+            return Destination.Level.WORKSPACE
+        if self.team_id is not None:
+            return Destination.Level.TEAM
+        return None
+
+    def from_dict(d: Dict[Any, Dict]):
+        return Destination(
+            d.get("team", {}).get("id", None),
+            d.get("team", {}).get("name", None),
+            d.get("workspace", {}).get("id", None),
+            d.get("workspace", {}).get("name", None),
+            d.get("project", {}).get("id", None),
+            d.get("project", {}).get("name", None),
+            d.get("project", {}).get("type", None),
+            d.get("dataset", {}).get("id", None),
+            d.get("dataset", {}).get("name", None),
+        )
+
+
+class Options:
+    """
+    Options for the cloning process.
+    """
+
+    def __init__(
+        self,
+        preserve_src_date: bool,
+        clone_annotations: bool,
+        conflict_resolution_mode: str,
+        preserve_structure: bool = True,
+    ):
+        """
+        :param preserve_src_date: Preserve the source date of the items.
+        :type preserve_src_date: bool
+        :param clone_annotations: Clone the annotations of the items.
+        :type clone_annotations: bool
+        :param conflict_resolution_mode: The conflict resolution mode.
+        :type conflict_resolution_mode: str
+        :param preserve_structure: Preserve the source structure of the items.
+        :type preserve_structure: bool"""
+        self.preserve_src_date = preserve_src_date
+        self.clone_annotations = clone_annotations
+        self.conflict_resolution_mode = conflict_resolution_mode
+        self.preserve_structure = preserve_structure
+
+    def __str__(self):
+        return f"preserve_structure: {self.preserve_structure}, preserve_src_date: {self.preserve_src_date}, clone_annotations: {self.clone_annotations}, conflict_resolution_mode: {self.conflict_resolution_mode}"
+
+    def from_dict(d: Dict[Any, Any]):
+        return Options(
+            d.get(JSONKEYS.PRESERVE_SRC_DATE, False),
+            d.get(JSONKEYS.CLONE_ANNOTATIONS, False),
+            d.get(JSONKEYS.CONFLICT_RESOLUTION_MODE, JSONKEYS.CONFLICT_RENAME),
+            d.get(JSONKEYS.PRESERVE_SRC_STRUCTURE, True),
+        )
+
+    def to_dict(self):
+        return {
+            JSONKEYS.PRESERVE_SRC_DATE: self.preserve_src_date,
+            JSONKEYS.CLONE_ANNOTATIONS: self.clone_annotations,
+            JSONKEYS.CONFLICT_RESOLUTION_MODE: self.conflict_resolution_mode,
+            JSONKEYS.PRESERVE_SRC_STRUCTURE: self.preserve_structure,
+        }
 
 
 api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 
+tli_move = True
+tli_conflict_resolution_mode = "skip"
+tli_preserve_structure = True
+tli_meta = None
+
 
 def extract_state_from_env():
+    """
+    This is a helper function to extract the state from the environment variables.
+    The state is provided by the modal window in Supervisely.
+
+    :State example:
+
+         .. code-block:: json
+
+            {
+                "items": [
+                    {
+                        "id": 329,
+                        "name": "DS2",
+                        "type": "dataset"
+                    }
+                ],
+                "action": "copy",
+                "source": {
+                    "team": {
+                        "id": 10,
+                        "name": "Team of admin"
+                    },
+                    "project": {
+                        "id": 172,
+                        "name": "Purple Collectible",
+                        "type": "images"
+                    },
+                    "workspace": {
+                        "id": 9,
+                        "name": "First Workspace"
+                    }
+                },
+                "options": {
+                    "preserveSrcDate": false,
+                    "cloneAnnotations": true,
+                    "conflictResolutionMode": "rename"
+                },
+                "destination": {
+                    "team": {
+                        "id": 10,
+                        "name": "Team of admin"
+                    },
+                    "project": {
+                        "id": 173,
+                        "name": "New Purple Collectible",
+                        "type": "images"
+                    },
+                    "workspace": {
+                        "id": 9,
+                        "name": "First Workspace"
+                    }
+                }
+            }
+    """
+
     base = "modal.state"
     state = {}
     for key, value in os.environ.items():
@@ -658,7 +841,7 @@ def clone_items(
         )
 
     dst_infos = clone_f(src_infos, dst_dataset_id, project_meta, options, progress_cb)
-    sly.logger.info(
+    logger.info(
         "Cloned %d items",
         len(dst_infos),
         extra={"src_dataset_id": src_dataset_id, "dst_dataset_id": dst_dataset_id},
@@ -677,7 +860,7 @@ def create_dataset_recursively(
     should_clone_items: bool = True,
     progress_cb=None,
 ):
-    sly.logger.info(
+    logger.info(
         "Creating dataset and its children",
         extra={
             "dataset_name": dataset_info.name,
@@ -730,7 +913,7 @@ def create_dataset_recursively(
                     created_info = run_in_executor(replace_dataset, existing, created_info)
             # to update items count
             created_info = run_in_executor(api.dataset.get_info_by_id, created_id)
-            sly.logger.info(
+            logger.info(
                 "Created Dataset",
                 extra={
                     "dataset_id": created_id,
@@ -786,7 +969,7 @@ def create_project(
         updated_at=updated_at,
         created_by=created_by,
     )
-    sly.logger.info(
+    logger.info(
         "Created project",
         extra={"project_id": dst_project_info.id, "project_name": dst_project_info.name},
     )
@@ -857,12 +1040,30 @@ def flatten_tree(tree: Dict):
     result = []
 
     def _dfs(tree: Dict):
-        for ds, children in tree.items():
+        for ds in sorted(tree.keys(), key=ds.name):
+            children = tree[ds]
             result.append(ds)
             _dfs(children)
 
     _dfs(tree)
     return result
+
+
+def tree_from_list(datasets: List[sly.DatasetInfo]):
+    dataset_tree = {}
+
+    def build_tree(parent_id):
+        children = {}
+        for dataset in datasets:
+            if dataset.parent_id == parent_id:
+                children[dataset] = build_tree(dataset.id)
+        return children
+
+    for dataset in datasets:
+        if dataset.parent_id is None:
+            dataset_tree[dataset] = build_tree(dataset.id)
+
+    return dataset_tree
 
 
 def find_children_in_tree(tree: Dict, parent_id: int):
@@ -898,7 +1099,7 @@ def copy_project_with_replace(
     datasets_tree=None,
 ):
     if dst_project_id is None and dst_workspace_id == src_project_info.workspace_id:
-        sly.logger.warning(
+        logger.warning(
             "Copying project to the same workspace with replace. Skipping",
             extra={"project_id": src_project_info.id},
         )
@@ -968,7 +1169,7 @@ def copy_project_with_replace(
             )
         if src_project_info.name in [pr.name for pr in existing_projects]:
             existing = [pr for pr in existing_projects if pr.name == src_project_info.name][0]
-            sly.logger.info(
+            logger.info(
                 "Replacing project",
                 extra={"existing_project_id": existing.id, "new_project_id": created_project.id},
             )
@@ -995,7 +1196,7 @@ def copy_project_with_skip(
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         if src_project_info.name in [ds.name for ds in existing_datasets]:
             progress_cb(src_project_info.items_count)
-            sly.logger.info("Dataset with the same name already exists. Skipping")
+            logger.info("Dataset with the same name already exists. Skipping")
             return []
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
         created_dataset = run_in_executor(
@@ -1025,7 +1226,7 @@ def copy_project_with_skip(
     else:
         if src_project_info.name in [pr.name for pr in existing_projects]:
             progress_cb(src_project_info.items_count)
-            sly.logger.info("Project with the same name already exists. Skipping")
+            logger.info("Project with the same name already exists. Skipping")
             return []
         created_project = run_in_executor(
             create_project,
@@ -1156,7 +1357,7 @@ def move_project(
     existing_projects=None,
 ):
     if dst_project_id is None and src_project_info.workspace_id == dst_workspace_id:
-        sly.logger.warning(
+        logger.warning(
             "Moving project to the same workspace. Skipping",
             extra={"project_id": src_project_info.id},
         )
@@ -1176,11 +1377,11 @@ def move_project(
     if dst_project_id == src_project_info.id or dst_dataset_id in [
         ds.id for ds in flatten_tree(datasets_tree)
     ]:
-        sly.logger.warning(
+        logger.warning(
             "Moving project to itself. Skipping deletion", extra={"project_id": dst_project_id}
         )
         return created_datasets
-    sly.logger.info("Removing source project", extra={"project_id": src_project_info.id})
+    logger.info("Removing source project", extra={"project_id": src_project_info.id})
     run_in_executor(api.project.remove, src_project_info.id)
     return created_datasets
 
@@ -1236,11 +1437,11 @@ def move_datasets_tree(
         progress_cb,
     )
     if dst_dataset_id in [ds.id for ds in flatten_tree(datasets_tree)]:
-        sly.logger.warning(
+        logger.warning(
             "Moving dataset to itself. Skipping deletion", extra={"dataset_id": dst_dataset_id}
         )
         return creted_datasets
-    sly.logger.info("Removing source datasets", extra={"dataset_id": dst_dataset_id})
+    logger.info("Removing source datasets", extra={"dataset_id": dst_dataset_id})
     run_in_executor(api.dataset.remove_batch, [ds.id for ds in flatten_tree(datasets_tree)])
     return creted_datasets
 
@@ -1384,7 +1585,7 @@ def copy_or_move(state: Dict, move: bool = False):
 
     progress.total = items_to_create
     progress.report_progress()
-    sly.logger.info("Total items: %d", items_to_create)
+    logger.info("Total items: %d", items_to_create)
 
     if len(project_items) > 0:
         f = move_project if move else copy_project
@@ -1454,14 +1655,305 @@ def copy_or_move(state: Dict, move: bool = False):
             )
 
 
+# ------------------------------------ Transfer Labeled Images ----------------------------------- #
+
+
+def process_tli_dataset(
+    src_ds_id: int,
+    destination: Union[Destination, int, sly.DatasetInfo],
+    options: Options,
+    update_meta: bool = True,
+    src_project_info: Optional[sly.ProjectInfo] = None,
+    dst_project: Union[int, sly.ProjectInfo] = None,
+    dst_dataset: Union[int, sly.DatasetInfo] = None,
+):
+    """
+    Transfer labeled images from source dataset to destination dataset.
+    """
+    global api, tli_move, tli_meta
+
+    # Case src = dataset, dst = dataset
+    # 1. get labeling jobs
+    # 2. extract images (all images from same dataset guaranteed)
+    # 3. create dataset in dst and copy items
+
+    # TODO: handle destination project
+
+    if dst_project is not None or dst_dataset is not None:
+        # TODO:
+        pass
+
+    if isinstance(dst_ds, int):
+        dst_ds = api.dataset.get_info_by_id(dst_ds)
+
+    src_dataset_info = api.dataset.get_info_by_id(src_ds_id)
+    logger.info(
+        f'Start processing dataset ID: {src_dataset_info.id} with name "{src_dataset_info.name}"'
+    )
+    if src_project_info is None:
+        logger.info("Source project info is not provided. Getting it from dataset info")
+        src_project_info = api.project.get_info_by_id(src_dataset_info.project_id)
+    jobs_list = api.labeling_job.get_list(
+        team_id=src_project_info.team_id,
+        project_id=src_project_info.id,
+        dataset_id=src_ds_id,
+    )
+    if len(jobs_list) == 0:
+        logger.info(
+            f'Dataset ID: {src_dataset_info.id} with name "{src_dataset_info.name}"]" has no jobs. Skipping'
+        )
+        return
+    completed_jobs = [
+        job
+        for job in jobs_list
+        if job.status == JSONKEYS.COMPLETED and job.accepted_images_count != 0
+    ]
+
+    if len(completed_jobs) == 0:
+        return
+
+    awaiting_jobs = [job for job in jobs_list if job.status != JSONKEYS.COMPLETED]
+    completed_items = []
+    intersecting_items = []
+    for job in completed_jobs:
+        logger.info(f'Collecting accepted images from job ID: {job.id} with name "{job.name}"')
+        job_info = api.labeling_job.get_info_by_id(job.id)
+        items = [
+            item for item in job_info.entities if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
+        ]
+        if len(items) != 0:
+            completed_items.extend(items)
+
+    completed_ids = list(set([item[JSONKEYS.ID] for item in completed_items]))
+    for job in awaiting_jobs:
+        logger.info(f'Collecting intersecting images from job ID: {job.id} with name "{job.name}"')
+        job_info = api.labeling_job.get_info_by_id(job.id)
+        intersecting_items.extend(
+            [
+                item
+                for item in job_info.entities
+                if item[JSONKEYS.ID] in completed_ids
+                and item[JSONKEYS.REVIEW_STATUS] != JSONKEYS.ACCEPTED
+            ]
+        )
+    intersecting_ids = list(set([item[JSONKEYS.ID] for item in intersecting_items]))
+    move_ids = list(set(completed_ids) - set(intersecting_ids))
+
+    if len(move_ids) == 0:
+        logger.info("No images to transfer")
+        return
+
+    if update_meta:
+        logger.info("Merging destination project meta with meta from source project")
+        tli_meta = merge_project_meta(src_project_info.id, dst_ds.project_id)
+        logger.info("Meta has been updated")
+
+    # TODO: create dataset with rename if conflict
+    # Handle case when dataset is already created from process_tli_project
+    if options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME:
+        logger.info("Conflict resolution mode is set to 'rename'. Create dataset with new name")
+        api.dataset.create()
+    else:
+        raise NotImplementedError("Conflict resolution mode is not implemented")
+
+    logger.info(
+        f'Start transferring images for dataset ID: {src_dataset_info.id} with name "{src_dataset_info.name}"'
+    )
+    filters = [{"field": "id", "operator": "in", "value": move_ids}]
+    image_infos = [
+        image for image in api.image.get_list_generator_async(dataset_id=src_ds_id, filters=filters)
+    ]
+    progress_clone = sly.tqdm_sly(desc="Transfering images", total=len(image_infos))
+    created_items = clone_images_with_annotations(
+        image_infos=image_infos,
+        dst_dataset_id=dst_ds.id,
+        project_meta=tli_meta,
+        options=options.to_dict(),
+        progress_cb=progress_clone,
+    )
+    logger.info(
+        f'Finished transferring images for dataset ID: {src_dataset_info.id} with name "{src_dataset_info.name}"'
+    )
+    logger.info(f"Start removing {len(move_ids)} images from source dataset")
+    progress_move = sly.tqdm_sly(total=len(move_ids), desc="Removing images from source dataset")
+    api.image.remove_batch(move_ids, progress_cb=progress_move)
+
+    logger.info(
+        f'Finished processing dataset ID: {src_dataset_info.id} with name "{src_dataset_info.name}"'
+    )
+    return len(created_items)
+
+
+def process_tli_project(
+    src_project_id: int,
+    destination: Destination,
+    options: Options,
+):
+    global api
+
+    dst_info = None
+    src_project_info = api.project.get_info_by_id(src_project_id)
+    message = (
+        f'Start processing project ID: {src_project_info.id} with name "{src_project_info.name}"'
+    )
+    logger.info(
+        f"{message}, resulting in a single dataset"
+        if not options.preserve_structure
+        else f"{message} with keeping structure"
+    )
+    src_datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+
+    perserve_date = options.preserve_src_date
+    project_type = src_project_info.type
+    created_datasets = []
+    project_meta = run_in_executor(merge_project_meta, src_project_info.id, destination.project_id)
+    created_dataset = run_in_executor(
+        api.dataset.create,
+        destination.project_id,
+        src_project_info.name,
+        src_project_info.description,
+        change_name_if_conflict=True,
+        parent_id=destination.dataset_id,
+        created_at=src_project_info.created_at if perserve_date else None,
+        updated_at=src_project_info.updated_at if perserve_date else None,
+        created_by=src_project_info.created_by_id if perserve_date else None,
+    )
+    progress_create_ds = tqdm_sly(
+        total=len(flatten_tree(src_datasets_tree)), desc="Creating datasets"
+    )
+    for ds, children in src_datasets_tree.items():
+        created_datasets.extend(
+            create_dataset_recursively(
+                project_type=project_type,
+                project_meta=project_meta,
+                dataset_info=ds,
+                children=children,
+                dst_project_id=destination.project_id,
+                dst_dataset_id=created_dataset.id,
+                options=options,
+                should_clone_items=False,
+                progress_cb=progress_create_ds,
+            )
+        )
+        dst_datasets = tree_from_list(created_datasets)
+        dst_datasets = flatten_tree(dst_datasets)
+        src_datasets = flatten_tree(src_datasets_tree)
+        # src_ds_infos = api.dataset.get_flatten_tree(src_project_info.id)
+        # dst_tree = copy_dataset_tree(api.dataset.get_tree(src_project_info.id), src_project_info.type, None, 0, 0, options, None)
+        # if options.preserve_structure and destination.level == Destination.Level.PROJECT:
+        #     src_tree = api.dataset.get_flatten_tree(src_project_info.id)
+        # dst_tree = api.dataset.get_flatten_tree(destination.project_id)
+        # src_names = [ds_info.name for ds_info in src_tree]
+        # dst_names = [ds_info.name for ds_info in dst_tree]
+        # if src_names == dst_names:
+        #     logger.info("Source and destination projects have the same structure")
+        #     destination.same_src_structure = True
+        # if destination.same_src_structure:
+        progress_project = tqdm_sly(total=len(src_datasets), desc="Processing datasets")
+        for src_ds, dst_ds in zip(src_datasets, dst_datasets):
+            created_items = process_tli_dataset(src_ds_id=src_ds.id, destination=dst_ds)
+            progress_project.update(1)
+        # TODO: remove empty with empty children
+
+    # progress_project = tqdm_sly(total=len(src_datasets), desc="Processing datasets")
+    # for idx, ds_info in enumerate(src_ds_infos, start=1):
+    #     ds_info: sly.DatasetInfo
+    #     dst_info = api.dataset.get_info_by_name(
+    #         project_id=dst_project_info.id, name=ds_info.name, parent_id=dst_info.parent_id
+    #     )
+    #     if dst_info is None:
+    #         dst_info = api.dataset.create(
+    #             dst_project_info.id,
+    #             ds_info.name,
+    #             description=f'Labeled Images transferred from project ID: {src_project_info.id} with name "{src_project_info.name}"',
+    #             parent_id=destination.project_id,
+    #         )
+    #     process_tli_dataset(
+    #         src_ds_id=ds_info.id,
+    #         dst_ds=dst_info,
+    #         src_project_info=src_project_info,
+    #         update_meta=False if idx != 1 else True,
+    #     )
+    #     progress_project.update(1)
+    logger.info(
+        f'Finished processing project ID: {src_project_info.id} with name "{src_project_info.name}"'
+    )
+
+
+def process_tli_job(
+    job_id: int,
+    destination: Destination,
+    options: Options,
+):
+    job_info = api.labeling_job.get_info_by_id(job_id)
+    process_tli_dataset(job_info.dataset_id, destination, options=options)
+
+
+def process_tli_queue(
+    queue_id: int,
+    destination: Destination,
+    options: Options,
+):
+    jobs_list = api.labeling_job.get_list(queue_ids=[queue_id])
+    for job_info in jobs_list:
+        process_tli_job(job_info.id, destination=destination, options=options)
+
+
+def transfer_labeled_items(state: Dict):
+    source: dict = state[JSONKEYS.SOURCE]
+    destination: dict = state[JSONKEYS.DESTINATION]
+    options: dict = state[JSONKEYS.OPTIONS]
+    items: dict = state[JSONKEYS.ITEMS]
+
+    src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
+    src_workspace_id = source.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    src_project_id = source.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    src_dataset_id = source.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+
+    # dst_team_id = destination[JSONKEYS.TEAM][JSONKEYS.ID]
+    # dst_workspace_id = destination.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    # dst_project_id = destination.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    # dst_dataset_id = destination.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+    destination = Destination.from_dict(destination)
+    options = Options.from_dict(options)
+
+    if len(items) == 0:
+        raise ValueError("Items list is empty")
+
+    project_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT]
+    dataset_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET]
+    job_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.JOB]
+    queue_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.QUEUE]
+
+    if len(project_items) > 0:
+        for item in project_items:
+            process_tli_project(item[JSONKEYS.ID], destination=destination, options=options)
+    if len(dataset_items) > 0:
+        for item in dataset_items:
+            process_tli_dataset(
+                src_ds_id=item[JSONKEYS.ID], destination=destination, options=options
+            )
+    if len(job_items) > 0:
+        for item in job_items:
+            process_tli_job(item[JSONKEYS.ID], destination=destination)
+    if len(queue_items) > 0:
+        for item in queue_items:
+            process_tli_queue(item[JSONKEYS.ID])
+
+
+# ----------------------------------------- Main Section ----------------------------------------- #
+
+
 def main():
     state = extract_state_from_env()
-    sly.logger.info("State:", extra=state)
+    logger.info("State:", extra=state)
     action = state[JSONKEYS.ACTION]
     if action == "move":
         copy_or_move(state, move=True)
     elif action == "copy":
         copy_or_move(state)
+    elif action == "transfer_labeled_items":
+        transfer_labeled_items(state)
     else:
         raise ValueError(f"Unsupported action: {action}")
 
