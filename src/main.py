@@ -1094,7 +1094,7 @@ def flatten_tree(tree: Dict):
     result = []
 
     def _dfs(tree: Dict):
-        for ds in sorted(tree.keys(), key=lambda obj: obj.id):
+        for ds in sorted(tree.keys(), key=lambda obj: obj.name):
             children = tree[ds]
             result.append(ds)
             _dfs(children)
@@ -1107,7 +1107,7 @@ def flatten_tree_by_map(tree: Dict, map: Dict):
     result = []
 
     def _dfs(tree: Dict):
-        for ds in sorted(tree.keys(), key=lambda obj: obj):
+        for ds in sorted(tree.keys(), key=lambda obj: map[obj].name):
             children = tree[ds]
             result.append(map[ds])
             _dfs(children)
@@ -1116,21 +1116,17 @@ def flatten_tree_by_map(tree: Dict, map: Dict):
     return result
 
 
-def tree_from_list(datasets: List[sly.DatasetInfo]):
-    dataset_tree = {}
+def tree_from_list(datasets: List[sly.DatasetInfo]) -> Dict[int, Dict]:
+    parent_map = {}
 
-    def build_tree(parent_id):
-        children = {}
-        for dataset in datasets:
-            if dataset.parent_id == parent_id:
-                children[dataset.id] = build_tree(dataset.id)
-        return children
-
+    # grouping ds by parent_id
     for dataset in datasets:
-        if dataset.parent_id is None:
-            dataset_tree[dataset.id] = build_tree(dataset.id)
+        parent_map.setdefault(dataset.parent_id, []).append(dataset)
 
-    return dataset_tree
+    def build_tree(parent_id: int) -> Dict[int, Dict]:
+        return {dataset.id: build_tree(dataset.id) for dataset in parent_map.get(parent_id, [])}
+
+    return build_tree(None)
 
 
 def find_children_in_tree(tree: Dict, parent_id: int):
@@ -1777,36 +1773,63 @@ def get_parents_chain(ds: sly.DatasetInfo, dst_datasets: List[sly.DatasetInfo]):
     return chain
 
 
-def ensure_dataset_deletion(
-    ds: sly.DatasetInfo,
-    dst_datasets: List[sly.DatasetInfo],
-    dataset_deletion_map: Dict[int, bool],
-    empty_datasets: List[sly.DatasetInfo],
-):
+def ensure_datasets_deletion(
+    dst_datasets: List[sly.DatasetInfo], empty_datasets: List[sly.DatasetInfo]
+) -> Dict[int, bool]:
     """
-    Ensure if dataset doesnt have any items to keep, it should be deleted.
-    If bottom dataset has items, all parent datasets will be marked as False (to keep).
+    Determines which datasets should be deleted.
+    A dataset is deleted if it is empty and all its children are also deleted.
 
-    Updates original dataset deletion map.
-    Dataset deletion map should be prepared with all datasets marked as True (for deletion).
-
-    :param ds: dataset to check
-    :type ds: sly.DatasetInfo
-    :param dst_datasets: list of destination datasets
-    :type dst_datasets: List[sly.DatasetInfo]
-    :param dataset_deletion_map: map of dataset IDs to delete
-    :type dataset_deletion_map: Dict[int, bool]
-    :param empty_datasets: list of empty datasets
-    :type empty_datasets: List[sly.DatasetInfo]
+    :param dst_datasets: List of all datasets in the project.
+    :param empty_datasets: List of empty datasets.
+    :return: A dictionary {dataset_id: should_delete (True/False)}.
     """
-    keep = False
-    chain = get_parents_chain(ds, dst_datasets)
-    for ds in chain:  # from bottom to top
-        if keep:
-            dataset_deletion_map[ds.id] = False
-        elif ds not in empty_datasets:
-            keep = True
-            dataset_deletion_map[ds.id] = False
+
+    # Initialize deletion map with all datasets marked as True
+    dataset_deletion_map = {ds.id: True for ds in dst_datasets}
+
+    # Build parent-child relationships
+    parent_map = {ds.id: ds.parent_id for ds in dst_datasets}
+    child_map = {ds.id: [] for ds in dst_datasets}
+
+    for ds in dst_datasets:
+        if ds.parent_id is not None:
+            child_map[ds.parent_id].append(ds.id)
+
+    # Function to calculate the depth of a dataset
+    def get_depth(ds_id):
+        depth = 0
+        while parent_map[ds_id] is not None:
+            ds_id = parent_map[ds_id]
+            depth += 1
+        return depth
+
+    # Sort datasets by depth (deepest first)
+    sorted_datasets = sorted(dst_datasets, key=lambda ds: get_depth(ds.id), reverse=True)
+
+    # Process datasets from bottom to top
+    for ds in sorted_datasets:
+        if ds not in empty_datasets:
+            dataset_deletion_map[ds.id] = False  # Keep non-empty datasets
+        else:
+            # Check if all children are marked for deletion
+            children = child_map.get(ds.id, [])
+            if any(not dataset_deletion_map[child] for child in children):
+                dataset_deletion_map[ds.id] = False  # Keep if any child must stay
+
+        # Use parent_map to update parent status
+        parent_id = parent_map.get(ds.id)
+        if parent_id is not None and parent_id in dataset_deletion_map:
+            # Parent should only be deleted if all its children are marked for deletion
+            if all(dataset_deletion_map[child] for child in child_map[parent_id]):
+                dataset_deletion_map[parent_id] = True
+            else:
+                dataset_deletion_map[parent_id] = False
+
+    for ds in dst_datasets:
+        logger.info(f"{ds.name}: {dataset_deletion_map[ds.id]}")
+
+    return dataset_deletion_map
 
 
 def process_tli_dataset(
@@ -2082,7 +2105,7 @@ def process_tli_project(
     empty_dst_datasets = []
     for src_ds, dst_ds in zip(src_datasets, dst_datasets):
         created_items = process_tli_dataset(
-            src_dataset=src_ds.id,
+            src_dataset=src_ds,
             destination=destination,
             options=options,
             update_meta=False,
@@ -2091,15 +2114,14 @@ def process_tli_project(
         if len(created_items) == 0:
             empty_dst_datasets.append(dst_ds)
         progress_project(1)
-    dataset_deletion_map = {ds.id: True for ds in dst_datasets}
-    for ds in dst_datasets:
-        ensure_dataset_deletion(
-            ds=ds,
-            dst_datasets=dst_datasets,
-            dataset_deletion_map=dataset_deletion_map,
-            empty_datasets=empty_dst_datasets,
-        )
-    for ds_id, to_delete in dataset_deletion_map.items():
+
+    dataset_deletion_map = ensure_datasets_deletion(
+        dst_datasets=dst_datasets,
+        empty_datasets=empty_dst_datasets,
+    )
+    for ds_id, to_delete in dict(
+        sorted(dataset_deletion_map.items(), key=lambda item: int(item[0]), reverse=True)
+    ).items():
         if to_delete:
             logger.info(f"Removing dataset ID: {ds_id} with name '{ids_map[ds_id].name}' ")
             try:
@@ -2118,7 +2140,7 @@ def process_tli_job(
     options: Options,
 ):
     job_info = api.labeling_job.get_info_by_id(job_id)
-    process_tli_dataset(job_info.dataset_id, destination, options=options)
+    process_tli_dataset(job_info.dataset_id, destination, options=options, update_meta=True)
 
 
 def process_tli_queue(
