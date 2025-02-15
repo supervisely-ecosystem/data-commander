@@ -61,6 +61,9 @@ class JSONKEYS:
     JOB = "labelingJob"
     QUEUE = "labelingQueue"
     PRESERVE_SRC_STRUCTURE = "preserveStructure"
+    TRANSFER_MODE = "transferMode"
+    TRANSFER_MOVE = "move"
+    TRANSFER_COPY = "copy"
 
 
 class Level:
@@ -199,6 +202,7 @@ class Options:
         clone_annotations: bool,
         conflict_resolution_mode: str,
         preserve_structure: bool = True,
+        transfer_mode: str = JSONKEYS.TRANSFER_COPY,
     ):
         """
         :param preserve_src_date: Preserve the source date of the items.
@@ -208,14 +212,24 @@ class Options:
         :param conflict_resolution_mode: The conflict resolution mode.
         :type conflict_resolution_mode: str
         :param preserve_structure: Preserve the source structure of the items.
-        :type preserve_structure: bool"""
+        :type preserve_structure: bool
+        :param transfer_mode: The transfer mode describes if the items should be copied or moved.
+        :type transfer_mode: str
+        """
         self.preserve_src_date = preserve_src_date
         self.clone_annotations = clone_annotations
         self.conflict_resolution_mode = conflict_resolution_mode
         self.preserve_structure = preserve_structure
+        self.transfer_mode = transfer_mode
 
     def __str__(self):
-        return f"preserve_structure: {self.preserve_structure}, preserve_src_date: {self.preserve_src_date}, clone_annotations: {self.clone_annotations}, conflict_resolution_mode: {self.conflict_resolution_mode}"
+        return (
+            f"{JSONKEYS.PRESERVE_SRC_STRUCTURE}: {self.preserve_structure}, "
+            f"{JSONKEYS.PRESERVE_SRC_DATE}: {self.preserve_src_date}, "
+            f"{JSONKEYS.CLONE_ANNOTATIONS}: {self.clone_annotations}, "
+            f"{JSONKEYS.CONFLICT_RESOLUTION_MODE}: {self.conflict_resolution_mode}, "
+            f"{JSONKEYS.TRANSFER_MODE}: {self.transfer_mode}"
+        )
 
     def from_dict(d: Dict[Any, Any]):
         return Options(
@@ -223,6 +237,7 @@ class Options:
             d.get(JSONKEYS.CLONE_ANNOTATIONS, False),
             d.get(JSONKEYS.CONFLICT_RESOLUTION_MODE, JSONKEYS.CONFLICT_RENAME),
             d.get(JSONKEYS.PRESERVE_SRC_STRUCTURE, True),
+            d.get(JSONKEYS.TRANSFER_MODE, JSONKEYS.TRANSFER_COPY),
         )
 
     def to_dict(self):
@@ -231,6 +246,7 @@ class Options:
             JSONKEYS.CLONE_ANNOTATIONS: self.clone_annotations,
             JSONKEYS.CONFLICT_RESOLUTION_MODE: self.conflict_resolution_mode,
             JSONKEYS.PRESERVE_SRC_STRUCTURE: self.preserve_structure,
+            JSONKEYS.TRANSFER_MODE: self.transfer_mode,
         }
 
 
@@ -1868,38 +1884,22 @@ def process_tli_dataset(
     global merged_meta
 
     create_dataset = False
-    create_project = False
 
-    # Case src = dataset, dst = dataset
-    # 1. get labeling jobs
-    # 2. extract images (all images from same dataset guaranteed)
-    # 3. create dataset in dst and copy items
-
-    # TODO: handle destination project
+    # Case: src = dataset, dst = project
     if destination.level == JSONKEYS.PROJECT and not any([parent_dataset, parent_project]):
         create_dataset = True
-        # process creation project
         parent_project = destination.info
+    # Case: src = dataset, dst = dataset
     elif destination.level == JSONKEYS.DATASET and not any([parent_dataset, parent_project]):
         create_dataset = True
-        # process creation dataset
-        parent_dataset = destination.info
-    elif parent_dataset is not None:
-        create_dataset = True
-        if isinstance(parent_dataset, int):
-            parent_dataset = api.dataset.get_info_by_id(parent_dataset)
-        # process existing dataset
+        parent_dataset = destination.info.parent_id
+        parent_project = destination.info.project_id
 
-    elif parent_project is not None:
-        create_project = True
-        # process existing project
+    # Case: src = project, dst = dataset
     elif target_dataset is not None:
         pass
     else:
         raise ValueError("Destination is not provided")
-
-    if create_dataset and create_project:
-        raise ValueError("Destination could not be the project and dataset at the same time")
 
     if isinstance(parent_project, int):
         parent_project = api.project.get_info_by_id(parent_project)
@@ -1912,7 +1912,7 @@ def process_tli_dataset(
 
     logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     if src_project is None:
-        logger.info("Source project info is not provided. Getting project info by dataset ID")
+        logger.info("Getting source ProjectInfo info by dataset ID")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
     elif isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
@@ -1972,8 +1972,7 @@ def process_tli_dataset(
         merged_meta = merge_project_meta(src_project.id, parent_project_id)
         logger.info("Meta has been updated")
 
-    # TODO: create dataset with rename if conflict
-    # Handle case when dataset is already created from process_tli_project
+    # Case: Dataset transfer not using the `process_tli_project` method.
     if not target_dataset and create_dataset:
         if options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME:
             original_description = (
@@ -1994,7 +1993,9 @@ def process_tli_dataset(
                 f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
         else:
-            raise NotImplementedError("Conflict resolution mode is not implemented")
+            raise NotImplementedError(
+                f"Conflict resolution mode '{options.conflict_resolution_mode}' is not implemented"
+            )
 
     logger.info(
         f"Start transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
@@ -2016,9 +2017,10 @@ def process_tli_dataset(
         f"Finished transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
     logger.info(f"Start removing {len(move_ids)} images from source dataset")
-    progress_move = tqdm(total=len(move_ids), desc="Removing images from source dataset")
-    # TODO Uncomment
-    # api.image.remove_batch(move_ids, progress_cb=progress_move)
+
+    if options.transfer_mode == JSONKEYS.TRANSFER_MOVE:  # TODO hardcoded to copy for now
+        progress_move = tqdm(total=len(move_ids), desc="Removing images from source dataset")
+        api.image.remove_batch(move_ids, progress_cb=progress_move)
 
     logger.info(f"Finished processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     return created_items
@@ -2040,7 +2042,6 @@ def process_tli_project(
         else f"{message} with keeping structure"
     )
 
-    perserve_date = options.preserve_src_date
     project_type = src_project.type
     original_description = (
         f"Original description: {src_project.description}" if src_project.description else ""
@@ -2120,7 +2121,7 @@ def process_tli_project(
     for src_ds, dst_ds in zip(src_datasets, dst_datasets):
         created_items = process_tli_dataset(
             src_dataset=src_ds,
-            destination=destination,
+            destination=destination,  # doesn't matter for this case
             options=options,
             update_meta=False,
             target_dataset=dst_ds,
@@ -2172,16 +2173,7 @@ def transfer_labeled_items(state: Dict):
     destination: dict = state[JSONKEYS.DESTINATION]
     options: dict = state[JSONKEYS.OPTIONS]
     items: dict = state[JSONKEYS.ITEMS]
-
-    src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
-    src_workspace_id = source.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
-    src_project_id = source.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
-    src_dataset_id = source.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
-
-    # dst_team_id = destination[JSONKEYS.TEAM][JSONKEYS.ID]
-    # dst_workspace_id = destination.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
-    # dst_project_id = destination.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
-    # dst_dataset_id = destination.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+    
     destination = Destination.from_dict(destination)
     options = Options.from_dict(options)
     source[JSONKEYS.ITEMS] = items
