@@ -1877,7 +1877,7 @@ def process_tli_dataset(
 
     # TODO: handle destination project
     if destination.level == JSONKEYS.PROJECT and not any([parent_dataset, parent_project]):
-        create_project = True
+        create_dataset = True
         # process creation project
         parent_project = destination.info
     elif destination.level == JSONKEYS.DATASET and not any([parent_dataset, parent_project]):
@@ -1912,7 +1912,7 @@ def process_tli_dataset(
 
     logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     if src_project is None:
-        logger.info("Source project info is not provided. Getting it from dataset info")
+        logger.info("Source project info is not provided. Getting project info by dataset ID")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
     elif isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
@@ -1934,6 +1934,7 @@ def process_tli_dataset(
     ]
 
     if len(completed_jobs) == 0:
+        logger.info("No completed jobs with accepted images. Skipping dataset")
         return []
 
     awaiting_jobs = [job for job in jobs_list if job.status != JSONKEYS.COMPLETED]
@@ -1964,7 +1965,11 @@ def process_tli_dataset(
 
     if update_meta:
         logger.info("Merging destination project meta with meta from source project")
-        merged_meta = merge_project_meta(src_project.id, target_dataset.project_id)
+        if target_dataset:
+            parent_project_id = target_dataset.project_id
+        else:
+            parent_project_id = parent_project.id
+        merged_meta = merge_project_meta(src_project.id, parent_project_id)
         logger.info("Meta has been updated")
 
     # TODO: create dataset with rename if conflict
@@ -1977,16 +1982,16 @@ def process_tli_dataset(
                 else ""
             )
             logger.info("Conflict resolution mode is set to 'rename'. Create dataset with new name")
-            run_in_executor(
+            target_dataset = run_in_executor(
                 api.dataset.create,
-                parent_dataset.project_id,
-                src_project.name,
-                f"Dataset created from project ID: {src_project.id} with name '{src_project.name}'. {original_description}",
+                parent_project.id,
+                src_dataset.name,
+                f"Dataset created from dataset ID: {src_dataset.id} with name '{src_dataset.name}'. {original_description}",
                 change_name_if_conflict=True,
                 parent_id=destination.dataset_id,
-                created_at=src_project.created_at if options.preserve_src_date else None,
-                updated_at=src_project.updated_at if options.preserve_src_date else None,
-                created_by=src_project.created_by_id if options.preserve_src_date else None,
+            )
+            logger.info(
+                f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
         else:
             raise NotImplementedError("Conflict resolution mode is not implemented")
