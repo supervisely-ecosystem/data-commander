@@ -1118,15 +1118,23 @@ def flatten_tree_by_map(tree: Dict, map: Dict):
 
 def tree_from_list(datasets: List[sly.DatasetInfo]) -> Dict[int, Dict]:
     parent_map = {}
-
-    # grouping ds by parent_id
+    ds_ids = [ds.id for ds in datasets]
+    # Grouping datasets by parent_id
     for dataset in datasets:
         parent_map.setdefault(dataset.parent_id, []).append(dataset)
 
     def build_tree(parent_id: int) -> Dict[int, Dict]:
         return {dataset.id: build_tree(dataset.id) for dataset in parent_map.get(parent_id, [])}
 
-    return build_tree(None)
+    # Find root nodes (datasets whose parent_id is not in the list of ids)
+    root_nodes = [dataset for dataset in datasets if dataset.parent_id not in ds_ids]
+
+    # Build the tree starting from root nodes
+    tree = {}
+    for root in root_nodes:
+        tree[root.id] = build_tree(root.id)
+
+    return tree
 
 
 def find_children_in_tree(tree: Dict, parent_id: int):
@@ -1787,19 +1795,20 @@ def ensure_datasets_deletion(
 
     # Initialize deletion map with all datasets marked as True
     dataset_deletion_map = {ds.id: True for ds in dst_datasets}
+    dst_ids = [ds.id for ds in dst_datasets]
 
     # Build parent-child relationships
     parent_map = {ds.id: ds.parent_id for ds in dst_datasets}
     child_map = {ds.id: [] for ds in dst_datasets}
 
     for ds in dst_datasets:
-        if ds.parent_id is not None:
+        if ds.parent_id in dst_ids:
             child_map[ds.parent_id].append(ds.id)
 
     # Function to calculate the depth of a dataset
     def get_depth(ds_id):
         depth = 0
-        while parent_map[ds_id] is not None:
+        while parent_map.get(ds_id, None) is not None:
             ds_id = parent_map[ds_id]
             depth += 1
         return depth
@@ -1827,7 +1836,7 @@ def ensure_datasets_deletion(
                 dataset_deletion_map[parent_id] = False
 
     for ds in dst_datasets:
-        logger.info(f"{ds.name}: {dataset_deletion_map[ds.id]}")
+        logger.info(f"Dataset ID: {ds.id}, Name: {ds.name}, Delete: {dataset_deletion_map[ds.id]}")
 
     return dataset_deletion_map
 
@@ -1901,7 +1910,7 @@ def process_tli_dataset(
     if isinstance(src_dataset, int):
         src_dataset = api.dataset.get_info_by_id(src_dataset)
 
-    logger.info(f'Start processing dataset ID: {src_dataset.id} with name "{src_dataset.name}"')
+    logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     if src_project is None:
         logger.info("Source project info is not provided. Getting it from dataset info")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
@@ -1915,7 +1924,7 @@ def process_tli_dataset(
     )
     if len(jobs_list) == 0:
         logger.info(
-            f'Dataset ID: {src_dataset.id} with name "{src_dataset.name}"]" has no jobs. Skipping'
+            f"Dataset ID: {src_dataset.id} with name '{src_dataset.name}' has no jobs. Skipping"
         )
         return []
     completed_jobs = [
@@ -1931,7 +1940,7 @@ def process_tli_dataset(
     completed_items = []
     intersecting_items = []
     for job in completed_jobs:
-        logger.info(f'Collecting accepted images from job ID: {job.id} with name "{job.name}"')
+        logger.info(f"Collecting accepted images from job ID: {job.id} with name '{job.name}'")
         job_info = api.labeling_job.get_info_by_id(job.id)
         items = [
             item for item in job_info.entities if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
@@ -1941,7 +1950,7 @@ def process_tli_dataset(
 
     completed_ids = list(set([item[JSONKEYS.ID] for item in completed_items]))
     for job in awaiting_jobs:
-        logger.info(f'Collecting intersecting images from job ID: {job.id} with name "{job.name}"')
+        logger.info(f"Collecting intersecting images from job ID: {job.id} with name '{job.name}'")
         job_info = api.labeling_job.get_info_by_id(job.id)
         intersecting_items.extend(
             [item for item in job_info.entities if item[JSONKEYS.ID] in completed_ids]
@@ -1983,7 +1992,7 @@ def process_tli_dataset(
             raise NotImplementedError("Conflict resolution mode is not implemented")
 
     logger.info(
-        f'Start transferring images for dataset ID: {src_dataset.id} with name "{src_dataset.name}"'
+        f"Start transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
     filters = [{"field": "id", "operator": "in", "value": move_ids}]
     images_generator = api.image.get_list_generator_async(
@@ -1999,14 +2008,14 @@ def process_tli_dataset(
         progress_cb=progress_clone,
     )
     logger.info(
-        f'Finished transferring images for dataset ID: {src_dataset.id} with name "{src_dataset.name}"'
+        f"Finished transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
     logger.info(f"Start removing {len(move_ids)} images from source dataset")
     progress_move = tqdm(total=len(move_ids), desc="Removing images from source dataset")
     # TODO Uncomment
     # api.image.remove_batch(move_ids, progress_cb=progress_move)
 
-    logger.info(f'Finished processing dataset ID: {src_dataset.id} with name "{src_dataset.name}"')
+    logger.info(f"Finished processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     return created_items
 
 
@@ -2019,7 +2028,7 @@ def process_tli_project(
 
     if isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
-    message = f'Start processing project ID: {src_project.id} with name "{src_project.name}"'
+    message = f"Start processing project ID: {src_project.id} with name '{src_project.name}'"
     logger.info(
         f"{message}, resulting in a single dataset"
         if not options.preserve_structure
@@ -2035,6 +2044,7 @@ def process_tli_project(
         destination.level == Level.WORKSPACE
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
+        logger.info(f"Destination is workspace. Creating project with name '{src_project.name}'")
         dst_project = api.project.create(
             workspace_id=destination.workspace_id,
             name=src_project.name,
@@ -2043,10 +2053,12 @@ def process_tli_project(
             change_name_if_conflict=True,
         )
         dst_dataset = None
+        logger.info(f"Project created with ID: {dst_project.id} and name '{dst_project.name}'")
     elif (
         destination.level == Level.PROJECT
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
+        logger.info(f"Destination is project. Creating dataset with name '{src_project.name}'")
         dst_project = destination.info
         dst_dataset = run_in_executor(
             api.dataset.create,
@@ -2055,16 +2067,14 @@ def process_tli_project(
             f"Dataset created from project ID: {src_project.id} with name '{src_project.name}'. {original_description}",
             change_name_if_conflict=True,
             parent_id=None,
-            created_at=src_project.created_at if perserve_date else None,
-            updated_at=src_project.updated_at if perserve_date else None,
-            created_by=src_project.created_by_id if perserve_date else None,
         )
+        logger.info(f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'")
     elif (
         destination.level == Level.DATASET
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
+        logger.info(f"Destination is dataset. Creating dataset with name '{src_project.name}'")
         dst_project = api.project.get_info_by_id(destination.info.project_id)
-
         dst_dataset = run_in_executor(
             api.dataset.create,
             dst_project.id,
@@ -2072,16 +2082,15 @@ def process_tli_project(
             f"Dataset created from project ID: {src_project.id} with name '{src_project.name}'. {original_description}",
             change_name_if_conflict=True,
             parent_id=destination.info.id,
-            created_at=src_project.created_at if perserve_date else None,
-            updated_at=src_project.updated_at if perserve_date else None,
-            created_by=src_project.created_by_id if perserve_date else None,
         )
+        logger.info(f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'")
 
     merged_meta = run_in_executor(merge_project_meta, src_project.id, dst_project.id)
 
     created_datasets = []
     src_datasets_tree = run_in_executor(api.dataset.get_tree, src_project.id)
     src_datasets: List[sly.DatasetInfo] = flatten_tree(src_datasets_tree)
+    logger.info("Start creating empty destination datasets")
     progress_create_ds = sly.Progress(total_cnt=len(src_datasets), message="Creating datasets")
     for ds, children in src_datasets_tree.items():
         created_datasets.extend(
@@ -2131,7 +2140,7 @@ def process_tli_project(
                     f"⚠️ Failed to remove dataset ID: {ds_id} with name '{ids_map[ds_id].name}'. It seems that dataset already removed"
                 )
 
-    logger.info(f'Finished processing project ID: {src_project.id} with name "{src_project.name}"')
+    logger.info(f"Finished processing project ID: {src_project.id} with name '{src_project.name}'")
 
 
 def process_tli_job(
