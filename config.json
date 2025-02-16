@@ -1,11 +1,13 @@
 {
-    "version": "2.0.0",
-    "name": "Data Commander",
-    "description": "Manage your projects with ease",
-    "type": "app",
-    "headless": true,
-    "main_script": "src/main.py",
-    "docker_image": "supervisely/base-py-sdk:6.73.265",
-    "instance_version": "6.12.12",
-    "system": true
+	"version": "2.0.0",
+	"name": "Data Commander",
+	"description": "Manage your projects with ease",
+	"type": "app",
+	"headless": true,
+	"main_script": "src/main.py",
+	"docker_image": "supervisely/base-py-sdk:6.73.265",
+	"instance_version": "6.12.12",
+	"system": true,
+	"icon": "https://github.com/user-attachments/assets/02fa3081-82b3-4a27-8df4-5994eda385ad",
+	"poster": ""
 }

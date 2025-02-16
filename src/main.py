@@ -3,11 +3,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from datetime import datetime
 from queue import Queue
 import os
+from collections import defaultdict
 from typing import Dict, List, Tuple, Union, Optional, Any
 from dotenv import load_dotenv
 from supervisely import logger
 import supervisely as sly
 from tqdm import tqdm
+from supervisely.api.labeling_job_api import LabelingJobInfo
 
 
 import api_utils as api_utils
@@ -1742,7 +1744,7 @@ def copy_or_move(state: Dict, move: bool = False):
             )
 
 
-# ------------------------------------ Transfer Labeled Images ----------------------------------- #
+# ------------------------------------ Transfer Labeled Items ----------------------------------- #
 
 
 def sync_call(coro):
@@ -1763,18 +1765,6 @@ def sync_call(coro):
         return future.result()
     else:
         return loop.run_until_complete(coro)
-
-
-def fetch_images_sync(images_generator):
-    image_infos = []
-
-    async def fetch_images():
-        async for image_batch in images_generator:
-            for image in image_batch:
-                image_infos.append(image)
-
-    sync_call(fetch_images())
-    return image_infos
 
 
 def find_parent(id: int, dst_datasets: List[sly.DatasetInfo]):
@@ -1857,7 +1847,7 @@ def ensure_datasets_deletion(
     return dataset_deletion_map
 
 
-def process_tli_dataset(
+def transfer_from_dataset(
     src_dataset: Union[int, sly.DatasetInfo],
     destination: Destination,
     options: Options,
@@ -1866,20 +1856,27 @@ def process_tli_dataset(
     target_dataset: Optional[Union[int, sly.DatasetInfo]] = None,
     parent_project: Optional[Union[int, sly.ProjectInfo]] = None,
     parent_dataset: Optional[Union[int, sly.DatasetInfo]] = None,
-):
+    completed_jobs: Optional[List[Union[int, LabelingJobInfo]]] = None,
+) -> Tuple[List[sly.ImageInfo], int]:
     """
-    Transfer labeled images from source dataset to destination dataset or project.
+    Transfer labeled items from source dataset to destination dataset or project.
+    Iterate over all jobs in source dataset and collect accepted items in completed jobs.
+    Additionally collect intersecting items from awaiting jobs to exclude them from transfer,
+    because annotation process is not finished for this items.
 
-    :param src_ds_id: source dataset ID
-    :param destination: destination object with information about destination project or dataset
-    :param options: options for transfer
-    :param update_meta: update meta information in destination project
-    :param src_project_info: source project information to optimize processing
+    :param src_dataset: Source dataset
+    :param destination: Destination object with information about destination project or dataset
+    :param options: Options for transfer
+    :param update_meta: Update meta information in destination project
+    :param src_project_info: Source project information to optimize processing
     :param parent_project: Parent destination project ID or project information, in wich destination dataset will be created
     :param parent_dataset: Parent destination dataset ID or dataset information in wich destination dataset will be created
     :param target_dataset: Destination dataset ID or dataset information.
                         If provided, destination dataset already exists and will be used as destination.
                         This parameter is used for recursive processing of datasets when transferring items from project.
+    :param completed_jobs: List of completed jobs for case of processing only specific jobs.
+
+    return: List of created items
     """
     global merged_meta
 
@@ -1899,7 +1896,7 @@ def process_tli_dataset(
     elif target_dataset is not None:
         pass
     else:
-        raise ValueError("Destination is not provided")
+        raise ValueError("Destination is not supproted")
 
     if isinstance(parent_project, int):
         parent_project = api.project.get_info_by_id(parent_project)
@@ -1926,22 +1923,27 @@ def process_tli_dataset(
         logger.info(
             f"Dataset ID: {src_dataset.id} with name '{src_dataset.name}' has no jobs. Skipping"
         )
-        return []
-    completed_jobs = [
-        job
-        for job in jobs_list
-        if job.status == JSONKEYS.COMPLETED and job.accepted_images_count != 0
-    ]
+        return [], None
+    if completed_jobs is None:
+        completed_jobs = [
+            job
+            for job in jobs_list
+            if job.status == JSONKEYS.COMPLETED and job.accepted_images_count != 0
+        ]
 
     if len(completed_jobs) == 0:
-        logger.info("No completed jobs with accepted images. Skipping dataset")
-        return []
+        logger.info("No completed jobs with accepted items. Skipping dataset")
+        return [], None
+
+    if isinstance(completed_jobs[0], int):
+        temp_infos = [api.labeling_job.get_info_by_id(job_id) for job_id in completed_jobs]
+        completed_jobs = temp_infos
 
     awaiting_jobs = [job for job in jobs_list if job.status != JSONKEYS.COMPLETED]
     completed_items = []
     intersecting_items = []
     for job in completed_jobs:
-        logger.info(f"Collecting accepted images from job ID: {job.id} with name '{job.name}'")
+        logger.info(f"Collecting accepted itms from job ID: {job.id} with name '{job.name}'")
         job_info = api.labeling_job.get_info_by_id(job.id)
         items = [
             item for item in job_info.entities if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
@@ -1951,7 +1953,7 @@ def process_tli_dataset(
 
     completed_ids = list(set([item[JSONKEYS.ID] for item in completed_items]))
     for job in awaiting_jobs:
-        logger.info(f"Collecting intersecting images from job ID: {job.id} with name '{job.name}'")
+        logger.info(f"Collecting intersecting items from job ID: {job.id} with name '{job.name}'")
         job_info = api.labeling_job.get_info_by_id(job.id)
         intersecting_items.extend(
             [item for item in job_info.entities if item[JSONKEYS.ID] in completed_ids]
@@ -1960,8 +1962,8 @@ def process_tli_dataset(
     move_ids = list(set(completed_ids) - set(intersecting_ids))
 
     if len(move_ids) == 0:
-        logger.info("No images to transfer")
-        return []
+        logger.info("No items to transfer")
+        return [], None
 
     if update_meta:
         logger.info("Merging destination project meta with meta from source project")
@@ -1998,39 +2000,49 @@ def process_tli_dataset(
             )
 
     logger.info(
-        f"Start transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
+        f"Start transferring items for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
-    filters = [{"field": "id", "operator": "in", "value": move_ids}]
-    images_generator = api.image.get_list_generator_async(
-        dataset_id=src_dataset.id, filters=filters
+
+    item_infos = get_item_infos(
+        dataset_id=src_dataset.id, item_ids=move_ids, project_type=src_project.type
     )
-    image_infos = fetch_images_sync(images_generator)
-    progress_clone = tqdm(desc="Transfering images", total=len(image_infos))
-    created_items = clone_images_with_annotations(
-        image_infos=image_infos,
+    progress_clone = tqdm(desc="Transfering items", total=len(item_infos))
+    created_items = clone_items(
+        src_dataset_id=src_dataset.id,
         dst_dataset_id=target_dataset.id,
+        project_type=src_project.type,
         project_meta=merged_meta,
         options=options.to_dict(),
         progress_cb=progress_clone,
+        src_infos=item_infos,
     )
     logger.info(
-        f"Finished transferring images for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
+        f"Finished transferring items for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
-    logger.info(f"Start removing {len(move_ids)} images from source dataset")
 
     if options.transfer_mode == JSONKEYS.TRANSFER_MOVE:  # TODO hardcoded to copy for now
-        progress_move = tqdm(total=len(move_ids), desc="Removing images from source dataset")
+        logger.info(f"Start removing {len(move_ids)} items from source dataset")
+        progress_move = tqdm(total=len(move_ids), desc="Removing items from source dataset")
         api.image.remove_batch(move_ids, progress_cb=progress_move)
 
     logger.info(f"Finished processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
-    return created_items
+    return created_items, target_dataset.project_id
 
 
-def process_tli_project(
+def transfer_from_project(
     src_project: Union[sly.ProjectInfo, int],
     destination: Destination,
     options: Options,
-):
+) -> sly.ProjectInfo:
+    """Transfer labeled images from source project to destination project or dataset.
+
+    :param src_project: Source project ID or ProjectInfo object.
+    :param destination: Destination object with information about destination project or dataset.
+    :param options: Options for transfer.
+
+    return: Destination project object.
+    """
+
     global merged_meta
 
     if isinstance(src_project, int):
@@ -2119,7 +2131,7 @@ def process_tli_project(
     progress_project = tqdm(total=len(src_datasets), desc="Processing datasets")
     empty_dst_datasets = []
     for src_ds, dst_ds in zip(src_datasets, dst_datasets):
-        created_items = process_tli_dataset(
+        created_items, _ = transfer_from_dataset(
             src_dataset=src_ds,
             destination=destination,  # doesn't matter for this case
             options=options,
@@ -2148,24 +2160,40 @@ def process_tli_project(
 
     logger.info(f"Finished processing project ID: {src_project.id} with name '{src_project.name}'")
 
+    return dst_project
 
-def process_tli_job(
-    job_id: int,
+
+def transfer_from_jobs(
+    jobs: Union[int, LabelingJobInfo],
     destination: Destination,
     options: Options,
 ):
-    job_info = api.labeling_job.get_info_by_id(job_id)
-    process_tli_dataset(job_info.dataset_id, destination, options=options, update_meta=True)
+    dataset_jobs_map = defaultdict(list)
+    if isinstance(jobs[0], int):
+        jobs = [api.labeling_job.get_info_by_id(job_id) for job_id in jobs]
+
+    for job_info in jobs:
+        if job_info.status != JSONKEYS.COMPLETED:
+            logger.info(f"Job ID: {jobs} with name '{job_info.name}' is not completed. Skipping")
+            continue
+        dataset_jobs_map[job_info.dataset_id].append(job_info)
+    for dataset_id, job_list in dataset_jobs_map.items():
+        transfer_from_dataset(
+            src_dataset=dataset_id,
+            destination=destination,
+            options=options,
+            update_meta=True,
+            completed_jobs=job_list,
+        )
 
 
-def process_tli_queue(
+def transfer_from_queue(
     queue_id: int,
     destination: Destination,
     options: Options,
 ):
     jobs_list = api.labeling_job.get_list(queue_ids=[queue_id])
-    for job_info in jobs_list:
-        process_tli_job(job_info.id, destination=destination, options=options)
+    transfer_from_jobs(jobs=jobs_list, destination=destination, options=options)
 
 
 def transfer_labeled_items(state: Dict):
@@ -2173,7 +2201,7 @@ def transfer_labeled_items(state: Dict):
     destination: dict = state[JSONKEYS.DESTINATION]
     options: dict = state[JSONKEYS.OPTIONS]
     items: dict = state[JSONKEYS.ITEMS]
-    
+
     destination = Destination.from_dict(destination)
     options = Options.from_dict(options)
     source[JSONKEYS.ITEMS] = items
@@ -2189,18 +2217,84 @@ def transfer_labeled_items(state: Dict):
 
     if len(project_items) > 0:
         for item in project_items:
-            process_tli_project(item[JSONKEYS.ID], destination=destination, options=options)
-    if len(dataset_items) > 0:
-        for item in dataset_items:
-            process_tli_dataset(
-                src_dataset=item[JSONKEYS.ID], destination=destination, options=options
+            dst_project_info = transfer_from_project(
+                item[JSONKEYS.ID], destination=destination, options=options
             )
+            if dst_project_info:
+                src_report = api.app.workflow.add_input_project(item[JSONKEYS.ID])
+                if dst_project_info.type == str(sly.ProjectType.IMAGES):
+                    logger.info(
+                        f"Trying to create version for DST Project ID: {dst_project_info.id} with name '{dst_project_info.name}'"
+                    )
+                    version = api.project.version.create(
+                        project_info=dst_project_info,
+                        version_title=f"Data Commander",
+                        version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {item[JSONKEYS.ID]}",
+                    )
+                    if version:
+                        logger.info(f"Latest Version: {version}")
+                else:
+                    logger.info(
+                        f"Versioning is not supported for project type: {dst_project_info.type}"
+                    )
+                    version = None
+                dst_report = api.app.workflow.add_output_project(
+                    dst_project_info.id, version_id=version
+                )
+                if src_report != {} and dst_report != {}:
+                    logger.info(
+                        f"Workflow saved for SRC Project ID: {item[JSONKEYS.ID]} -> DST Project ID: {dst_project_info.id}"
+                    )
+
+    if len(dataset_items) > 0:
+        project_datasets_map = defaultdict(list)
+        dataset_infos = [api.dataset.get_info_by_id(item[JSONKEYS.ID]) for item in dataset_items]
+        for ds in dataset_infos:
+            project_datasets_map[ds.project_id].append(ds)
+        for src_project_id, datasets in project_datasets_map.items():
+            dst_project_info = None
+            for dataset in datasets:
+                dst_items, dst_project_id = transfer_from_dataset(
+                    src_dataset=dataset, destination=destination, options=options
+                )
+                if dst_items != [] and dst_project_info is None:
+                    dst_project_info = api.project.get_info_by_id(dst_project_id)
+
+            if dst_project_info:
+                api.app.workflow.enable()
+                src_report = api.app.workflow.add_input_project(src_project_id)
+                if dst_project_info.type == str(sly.ProjectType.IMAGES):
+                    logger.info(
+                        f"Trying to create version for DST Project ID: {dst_project_info.id} with name '{dst_project_info.name}'"
+                    )
+                    version = api.project.version.create(
+                        project_info=dst_project_info,
+                        version_title=f"Data Commander",
+                        version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {src_project_id}",
+                    )
+                    if version:
+                        logger.info(f"Latest Version: {version}")
+                else:
+                    logger.info(
+                        f"Versioning is not supported for project type: {dst_project_info.type}"
+                    )
+                    version = None
+                dst_report = api.app.workflow.add_output_project(
+                    dst_project_info.id, version_id=version
+                )
+                if src_report != {} and dst_report != {}:
+                    logger.info(
+                        f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_info.id}"
+                    )
+
     if len(job_items) > 0:
-        for item in job_items:
-            process_tli_job(item[JSONKEYS.ID], destination=destination)
+        jobs = [item[JSONKEYS.ID] for item in job_items]
+        transfer_from_jobs(jobs=jobs, destination=destination, options=options)
     if len(queue_items) > 0:
         for item in queue_items:
-            process_tli_queue(item[JSONKEYS.ID])
+            transfer_from_queue(
+                queue_id=item[JSONKEYS.ID], destination=destination, options=options
+            )
 
 
 # ----------------------------------------- Main Section ----------------------------------------- #
