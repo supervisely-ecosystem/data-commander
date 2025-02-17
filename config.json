@@ -8,6 +8,6 @@
 	"docker_image": "supervisely/base-py-sdk:6.73.265",
 	"instance_version": "6.12.12",
 	"system": true,
-	"icon": "https://github.com/user-attachments/assets/02fa3081-82b3-4a27-8df4-5994eda385ad",
-	"poster": ""
+	"icon": "https://github.com/user-attachments/assets/673c34ac-2f58-4d1c-8679-439e85a25a45",
+	"poster": "https://github.com/user-attachments/assets/09252852-3f49-4bad-b665-14e52458e4c0"
 }

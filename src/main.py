@@ -26,6 +26,9 @@ api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 merged_meta = None
 
+if sly.is_development():
+    api.app.workflow.enable()
+
 
 class JSONKEYS:
     ACTION = "action"
@@ -60,12 +63,10 @@ class JSONKEYS:
     COMPLETED = "completed"
     DONE = "done"
     NONE = "none"
-    JOB = "labelingJob"
-    QUEUE = "labelingQueue"
+    JOB = "job"
+    QUEUE = "queue"
     PRESERVE_SRC_STRUCTURE = "preserveStructure"
     TRANSFER_MODE = "transferMode"
-    TRANSFER_MOVE = "move"
-    TRANSFER_COPY = "copy"
 
 
 class Level:
@@ -144,11 +145,11 @@ class Source:
         team_name: str,
         workspace_id: int,
         workspace_name: str,
-        project_id: int,
-        project_name: str,
-        project_type: str,
-        dataset_id: int,
-        dataset_name: str,
+        project_id: int = None,
+        project_name: str = None,
+        project_type: str = None,
+        dataset_id: int = None,
+        dataset_name: str = None,
         items: List[Dict] = None,
     ):
         self.team_id = team_id
@@ -169,6 +170,8 @@ class Source:
             return api.dataset.get_info_by_id(self.dataset_id)
         if self.level == Level.PROJECT:
             return api.project.get_info_by_id(self.project_id)
+        if self.level == Level.WORKSPACE:
+            return api.workspace.get_info_by_id(self.workspace_id)
         return None
 
     def detect_level(self):
@@ -176,6 +179,8 @@ class Source:
             return Level.DATASET
         if self.project_id is not None:
             return Level.PROJECT
+        if self.workspace_id is not None:
+            return Level.WORKSPACE
         return None
 
     def from_dict(d: Dict[Any, Dict]):
@@ -204,7 +209,7 @@ class Options:
         clone_annotations: bool,
         conflict_resolution_mode: str,
         preserve_structure: bool = True,
-        transfer_mode: str = JSONKEYS.TRANSFER_COPY,
+        transfer_mode: str = JSONKEYS.ACTION_COPY,
     ):
         """
         :param preserve_src_date: Preserve the source date of the items.
@@ -239,7 +244,7 @@ class Options:
             d.get(JSONKEYS.CLONE_ANNOTATIONS, False),
             d.get(JSONKEYS.CONFLICT_RESOLUTION_MODE, JSONKEYS.CONFLICT_RENAME),
             d.get(JSONKEYS.PRESERVE_SRC_STRUCTURE, True),
-            d.get(JSONKEYS.TRANSFER_MODE, JSONKEYS.TRANSFER_COPY),
+            d.get(JSONKEYS.TRANSFER_MODE, JSONKEYS.ACTION_COPY),
         )
 
     def to_dict(self):
@@ -1100,6 +1105,11 @@ def _count_items_in_tree(tree):
 
 
 def _get_all_parents(dataset: sly.DatasetInfo, dataset_infos: List[sly.DatasetInfo]):
+    """
+    This method returns only all parents of the dataset in the dataset_infos list.
+    If stability and performance matter, it's better to use `get_parents_chain` (iterative version).
+    It avoids deep recursion and doesn't risk stack overflow when datasets have a deep hierarchy.
+    """
     if dataset.parent_id is None:
         return []
     for dataset_info in dataset_infos:
@@ -1109,6 +1119,19 @@ def _get_all_parents(dataset: sly.DatasetInfo, dataset_infos: List[sly.DatasetIn
 
 
 def flatten_tree(tree: Dict):
+    result = []
+
+    def _dfs(tree: Dict):
+        for ds, children in tree.items():
+            result.append(ds)
+            _dfs(children)
+
+    _dfs(tree)
+    return result
+
+
+def flatten_tree_sorted_name(tree: Dict):
+    """Flatten tree and sort datasets by name"""
     result = []
 
     def _dfs(tree: Dict):
@@ -1122,6 +1145,10 @@ def flatten_tree(tree: Dict):
 
 
 def flatten_tree_by_map(tree: Dict, map: Dict):
+    """
+    Flatten tree and sort datasets by name using map to get dataset info.
+    Map must be {dataset_id: dataset_info}.
+    """
     result = []
 
     def _dfs(tree: Dict):
@@ -1135,6 +1162,10 @@ def flatten_tree_by_map(tree: Dict, map: Dict):
 
 
 def tree_from_list(datasets: List[sly.DatasetInfo]) -> Dict[int, Dict]:
+    """
+    Build tree from list of datasets using parent_id form dataset info
+    All datasets must belong to the same project.
+    """
     parent_map = {}
     ds_ids = [ds.id for ds in datasets]
     # Grouping datasets by parent_id
@@ -1767,7 +1798,7 @@ def sync_call(coro):
         return loop.run_until_complete(coro)
 
 
-def find_parent(id: int, dst_datasets: List[sly.DatasetInfo]):
+def _find_parent(id: int, dst_datasets: List[sly.DatasetInfo]):
     """Find parent dataset info by id in list of datasets"""
     for ds in dst_datasets:
         if ds.id == id:
@@ -1778,12 +1809,13 @@ def find_parent(id: int, dst_datasets: List[sly.DatasetInfo]):
 def get_parents_chain(ds: sly.DatasetInfo, dst_datasets: List[sly.DatasetInfo]):
     """
     Get chain of parent datasets for defined dataset.
-    Returns list of datasets from bottom to top.
+    Returns list of datasets from bottom to top including the dataset itself.
+    If you dont need the dataset itself, you can use `get_parents_chain(ds.parent_id, dst_datasets)` or just pop the first element.
     """
     chain = []
     while ds is not None:
         chain.append(ds)
-        ds = find_parent(ds.parent_id, dst_datasets)
+        ds = _find_parent(ds.parent_id, dst_datasets)
     return chain
 
 
@@ -1792,7 +1824,7 @@ def ensure_datasets_deletion(
 ) -> Dict[int, bool]:
     """
     Determines which datasets should be deleted.
-    A dataset is deleted if it is empty and all its children are also deleted.
+    A dataset is deleted if it is empty and all its children are also could be deleted.
 
     :param dst_datasets: List of all datasets in the project.
     :param empty_datasets: List of empty datasets.
@@ -1847,6 +1879,42 @@ def ensure_datasets_deletion(
     return dataset_deletion_map
 
 
+def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_project_id: int):
+    try:
+        if isinstance(dst_project, int):
+            dst_project = api.project.get_info_by_id(dst_project)
+        if dst_project.type == str(sly.ProjectType.IMAGES):
+            logger.info(
+                f"Trying to create version for DST Project ID: {dst_project.id} with name '{dst_project.name}'"
+            )
+            version = api.project.version.create(
+                project_info=dst_project,
+                version_title=f"Data Commander",
+                version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {src_project_id}",
+            )
+            if version:
+                logger.info(f"Latest Version: {version}")
+        else:
+            logger.info(f"Versioning is not supported for project type: {dst_project.type}")
+            version = None
+    except Exception as e:
+        logger.error(f"Failed to create version for project ID: {dst_project.id}. Error: {e}")
+        version = None
+    return version
+
+
+def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: int = None):
+    """
+    Assign workflow to source and destination projects.
+    """
+    src_report = api.app.workflow.add_input_project(src_project_id)
+    dst_report = api.app.workflow.add_output_project(dst_project_id, version_id=dst_version_id)
+    if src_report != {} and dst_report != {}:
+        logger.info(
+            f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_id}"
+        )
+
+
 def transfer_from_dataset(
     src_dataset: Union[int, sly.DatasetInfo],
     destination: Destination,
@@ -1864,16 +1932,16 @@ def transfer_from_dataset(
     Additionally collect intersecting items from awaiting jobs to exclude them from transfer,
     because annotation process is not finished for this items.
 
-    :param src_dataset: Source dataset
+    :param src_dataset: Source dataset.
     :param destination: Destination object with information about destination project or dataset
-    :param options: Options for transfer
-    :param update_meta: Update meta information in destination project
-    :param src_project_info: Source project information to optimize processing
-    :param parent_project: Parent destination project ID or project information, in wich destination dataset will be created
-    :param parent_dataset: Parent destination dataset ID or dataset information in wich destination dataset will be created
+    :param options: Options for transfer.
+    :param update_meta: Update meta information in destination project.
+    :param src_project: Source project information to optimize processing.
     :param target_dataset: Destination dataset ID or dataset information.
                         If provided, destination dataset already exists and will be used as destination.
                         This parameter is used for recursive processing of datasets when transferring items from project.
+    :param parent_project: Parent destination project ID or project information, in wich destination dataset will be created.
+    :param parent_dataset: Parent destination dataset ID or dataset information in wich destination dataset will be created.
     :param completed_jobs: List of completed jobs for case of processing only specific jobs.
 
     return: List of created items
@@ -2020,7 +2088,7 @@ def transfer_from_dataset(
         f"Finished transferring items for dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
     )
 
-    if options.transfer_mode == JSONKEYS.TRANSFER_MOVE:  # TODO hardcoded to copy for now
+    if options.transfer_mode == JSONKEYS.ACTION_MOVE:  # TODO hardcoded to copy for now
         logger.info(f"Start removing {len(move_ids)} items from source dataset")
         progress_move = tqdm(total=len(move_ids), desc="Removing items from source dataset")
         api.image.remove_batch(move_ids, progress_cb=progress_move)
@@ -2034,13 +2102,14 @@ def transfer_from_project(
     destination: Destination,
     options: Options,
 ) -> sly.ProjectInfo:
-    """Transfer labeled images from source project to destination project or dataset.
+    """
+    Transfer labeled images from source project to destination project or dataset.
 
     :param src_project: Source project ID or ProjectInfo object.
     :param destination: Destination object with information about destination project or dataset.
     :param options: Options for transfer.
 
-    return: Destination project object.
+    return: Destination project info.
     """
 
     global merged_meta
@@ -2107,7 +2176,7 @@ def transfer_from_project(
 
     created_datasets = []
     src_datasets_tree = run_in_executor(api.dataset.get_tree, src_project.id)
-    src_datasets: List[sly.DatasetInfo] = flatten_tree(src_datasets_tree)
+    src_datasets: List[sly.DatasetInfo] = flatten_tree_sorted_name(src_datasets_tree)
     logger.info("Start creating empty destination datasets")
     progress_create_ds = sly.Progress(total_cnt=len(src_datasets), message="Creating datasets")
     for ds, children in src_datasets_tree.items():
@@ -2168,7 +2237,16 @@ def transfer_from_jobs(
     destination: Destination,
     options: Options,
 ):
+    """
+    Transfer labeled items from selected labeling jobs to destination project or dataset.
+    In this case we collect items only from selected and completed jobs excluding items from awaiting jobs.
+
+    :param jobs: List of job IDs or LabelingJobInfo objects.
+    :param destination: Destination object with information about destination project or dataset.
+    :param options: Options for transfer.
+    """
     dataset_jobs_map = defaultdict(list)
+    src_dst_project_map = {}
     if isinstance(jobs[0], int):
         jobs = [api.labeling_job.get_info_by_id(job_id) for job_id in jobs]
 
@@ -2177,13 +2255,25 @@ def transfer_from_jobs(
             logger.info(f"Job ID: {jobs} with name '{job_info.name}' is not completed. Skipping")
             continue
         dataset_jobs_map[job_info.dataset_id].append(job_info)
+
     for dataset_id, job_list in dataset_jobs_map.items():
-        transfer_from_dataset(
-            src_dataset=dataset_id,
+        src_dataset = api.dataset.get_info_by_id(dataset_id)
+        transfered_items = transfer_from_dataset(
+            src_dataset=src_dataset,
             destination=destination,
             options=options,
             update_meta=True,
             completed_jobs=job_list,
+        )
+
+        if transfered_items and str(src_dataset.project_id) not in src_dst_project_map:
+            dst_project = api.dataset.get_info_by_id(transfered_items[0].id)
+            src_dst_project_map[src_dataset.project_id] = dst_project
+
+    for src_project_id, dst_project in src_dst_project_map.items():
+        version = create_dst_backup_version(dst_project=dst_project, src_project_id=src_project_id)
+        assign_workflow(
+            src_project_id=src_project_id, dst_project_id=dst_project.id, dst_version_id=version
         )
 
 
@@ -2192,11 +2282,23 @@ def transfer_from_queue(
     destination: Destination,
     options: Options,
 ):
+    """
+    Transfer labeled items from selected labeling queue to destination project or dataset.
+    It is similar to transferring items from jobs, but in this case we collect items from all jobs in the queue.
+
+    :param queue_id: Queue ID.
+    :param destination: Destination object with information about destination project or dataset.
+    :param options: Options for transfer
+    """
     jobs_list = api.labeling_job.get_list(queue_ids=[queue_id])
     transfer_from_jobs(jobs=jobs_list, destination=destination, options=options)
 
 
 def transfer_labeled_items(state: Dict):
+    """
+    This function uses a state dictionary to extract information about the source, destination, options, and items to transfer.
+    The state is extracted from environment variables, which are set by UI calls in the Data Organizer menu or Data Commander apps.
+    """
     source: dict = state[JSONKEYS.SOURCE]
     destination: dict = state[JSONKEYS.DESTINATION]
     options: dict = state[JSONKEYS.OPTIONS]
@@ -2221,30 +2323,8 @@ def transfer_labeled_items(state: Dict):
                 item[JSONKEYS.ID], destination=destination, options=options
             )
             if dst_project_info:
-                src_report = api.app.workflow.add_input_project(item[JSONKEYS.ID])
-                if dst_project_info.type == str(sly.ProjectType.IMAGES):
-                    logger.info(
-                        f"Trying to create version for DST Project ID: {dst_project_info.id} with name '{dst_project_info.name}'"
-                    )
-                    version = api.project.version.create(
-                        project_info=dst_project_info,
-                        version_title=f"Data Commander",
-                        version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {item[JSONKEYS.ID]}",
-                    )
-                    if version:
-                        logger.info(f"Latest Version: {version}")
-                else:
-                    logger.info(
-                        f"Versioning is not supported for project type: {dst_project_info.type}"
-                    )
-                    version = None
-                dst_report = api.app.workflow.add_output_project(
-                    dst_project_info.id, version_id=version
-                )
-                if src_report != {} and dst_report != {}:
-                    logger.info(
-                        f"Workflow saved for SRC Project ID: {item[JSONKEYS.ID]} -> DST Project ID: {dst_project_info.id}"
-                    )
+                version = create_dst_backup_version(dst_project_info, item[JSONKEYS.ID])
+                assign_workflow(item[JSONKEYS.ID], dst_project_info.id, version)
 
     if len(dataset_items) > 0:
         project_datasets_map = defaultdict(list)
@@ -2261,35 +2341,13 @@ def transfer_labeled_items(state: Dict):
                     dst_project_info = api.project.get_info_by_id(dst_project_id)
 
             if dst_project_info:
-                api.app.workflow.enable()
-                src_report = api.app.workflow.add_input_project(src_project_id)
-                if dst_project_info.type == str(sly.ProjectType.IMAGES):
-                    logger.info(
-                        f"Trying to create version for DST Project ID: {dst_project_info.id} with name '{dst_project_info.name}'"
-                    )
-                    version = api.project.version.create(
-                        project_info=dst_project_info,
-                        version_title=f"Data Commander",
-                        version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {src_project_id}",
-                    )
-                    if version:
-                        logger.info(f"Latest Version: {version}")
-                else:
-                    logger.info(
-                        f"Versioning is not supported for project type: {dst_project_info.type}"
-                    )
-                    version = None
-                dst_report = api.app.workflow.add_output_project(
-                    dst_project_info.id, version_id=version
-                )
-                if src_report != {} and dst_report != {}:
-                    logger.info(
-                        f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_info.id}"
-                    )
+                version = create_dst_backup_version(dst_project_info, src_project_id)
+                assign_workflow(src_project_id, dst_project_info.id, version)
 
     if len(job_items) > 0:
         jobs = [item[JSONKEYS.ID] for item in job_items]
         transfer_from_jobs(jobs=jobs, destination=destination, options=options)
+
     if len(queue_items) > 0:
         for item in queue_items:
             transfer_from_queue(
