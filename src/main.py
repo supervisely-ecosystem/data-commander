@@ -25,9 +25,11 @@ UPLOAD_IMAGES_BATCH_SIZE = 1000
 api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 merged_meta = None
+TASK_ID = None
 
 if sly.is_development():
     api.app.workflow.enable()
+    TASK_ID = os.getenv("TASK_ID", None)
 
 
 class JSONKEYS:
@@ -1907,8 +1909,10 @@ def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: in
     """
     Assign workflow to source and destination projects.
     """
-    src_report = api.app.workflow.add_input_project(src_project_id)
-    dst_report = api.app.workflow.add_output_project(dst_project_id, version_id=dst_version_id)
+    src_report = api.app.workflow.add_input_project(src_project_id, task_id=TASK_ID)
+    dst_report = api.app.workflow.add_output_project(
+        dst_project_id, version_id=dst_version_id, task_id=TASK_ID
+    )
     if src_report != {} and dst_report != {}:
         logger.info(
             f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_id}"
@@ -2011,7 +2015,7 @@ def transfer_from_dataset(
     completed_items = []
     intersecting_items = []
     for job in completed_jobs:
-        logger.info(f"Collecting accepted itms from job ID: {job.id} with name '{job.name}'")
+        logger.info(f"Collecting accepted items from job ID: {job.id} with name '{job.name}'")
         job_info = api.labeling_job.get_info_by_id(job.id)
         items = [
             item for item in job_info.entities if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
@@ -2252,13 +2256,15 @@ def transfer_from_jobs(
 
     for job_info in jobs:
         if job_info.status != JSONKEYS.COMPLETED:
-            logger.info(f"Job ID: {jobs} with name '{job_info.name}' is not completed. Skipping")
+            logger.info(
+                f"Job ID: {job_info.id} with name '{job_info.name}' is not completed. Skipping"
+            )
             continue
         dataset_jobs_map[job_info.dataset_id].append(job_info)
 
     for dataset_id, job_list in dataset_jobs_map.items():
         src_dataset = api.dataset.get_info_by_id(dataset_id)
-        transfered_items = transfer_from_dataset(
+        transfered_items, dst_project_id = transfer_from_dataset(
             src_dataset=src_dataset,
             destination=destination,
             options=options,
@@ -2267,21 +2273,19 @@ def transfer_from_jobs(
         )
 
         if transfered_items and str(src_dataset.project_id) not in src_dst_project_map:
-            dst_project = api.dataset.get_info_by_id(transfered_items[0].id)
+            dst_project = api.project.get_info_by_id(dst_project_id)
             src_dst_project_map[src_dataset.project_id] = dst_project
 
     for src_project_id, dst_project in src_dst_project_map.items():
         version = create_dst_backup_version(dst_project=dst_project, src_project_id=src_project_id)
         assign_workflow(
-            src_project_id=src_project_id, dst_project_id=dst_project.id, dst_version_id=version
+            src_project_id=src_project_id,
+            dst_project_id=dst_project.id,
+            dst_version_id=version,
         )
 
 
-def transfer_from_queue(
-    queue_id: int,
-    destination: Destination,
-    options: Options,
-):
+def transfer_from_queue(queue_id: int, destination: Destination, options: Options, source: Source):
     """
     Transfer labeled items from selected labeling queue to destination project or dataset.
     It is similar to transferring items from jobs, but in this case we collect items from all jobs in the queue.
@@ -2290,7 +2294,7 @@ def transfer_from_queue(
     :param destination: Destination object with information about destination project or dataset.
     :param options: Options for transfer
     """
-    jobs_list = api.labeling_job.get_list(queue_ids=[queue_id])
+    jobs_list = api.labeling_job.get_list(team_id=source.team_id, queue_ids=[queue_id])
     transfer_from_jobs(jobs=jobs_list, destination=destination, options=options)
 
 
@@ -2351,7 +2355,7 @@ def transfer_labeled_items(state: Dict):
     if len(queue_items) > 0:
         for item in queue_items:
             transfer_from_queue(
-                queue_id=item[JSONKEYS.ID], destination=destination, options=options
+                queue_id=item[JSONKEYS.ID], destination=destination, options=options, source=source
             )
 
 
