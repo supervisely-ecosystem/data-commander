@@ -92,13 +92,23 @@ Data Commander as a Service offers two main functionalities:
 
 ### As a service **Move/Copy:**
 
-1. In the `Projects` management section, select the projects,datasets or items and tick the required checkboxes.
+1. In the `Projects` management section, select the projects, datasets or items and tick the required checkboxes.
+
+<img width="70%" src="https://github.com/user-attachments/assets/bdb91202-6d15-404e-9896-556608fc2f32" />
 
 2. A new button will appear in the header: `With N selected`.
 
 3. Choose the `Move selected` action or `Copy selected`
 
-4. A modal window will appear, allowing you to select the destination for the items. You can create a new project or dataset during this process. Select the desired destination and click the `Move` or `Copy` button.
+4. A modal window will appear, allowing you to select the destination for the items. <br>
+   You can create a new project or dataset during this process. <br>
+   Info tip will help you to understand the process. Select the desired destination and click the `Move` or `Copy` button.
+
+<img width="70%" src="https://github.com/user-attachments/assets/21b4e127-b7d6-4aa7-95fe-ebb19eaab7f4" />
+
+5. You will be redirected to the Tasks page to track the task progress.
+
+<img width="70%" src="https://github.com/user-attachments/assets/7f5c1667-1622-482a-9fe4-52c738d749b4" />
 
 ### As a service **Transfer Annotated Items:**
 
