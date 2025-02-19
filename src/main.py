@@ -1777,7 +1777,7 @@ def copy_or_move(state: Dict, move: bool = False):
             )
 
 
-# ------------------------------------ Transfer Labeled Items ----------------------------------- #
+# ------------------------------------ Transfer Annotated Items ----------------------------------- #
 
 
 def sync_call(coro):
@@ -1892,7 +1892,7 @@ def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_proj
             version = api.project.version.create(
                 project_info=dst_project,
                 version_title=f"Data Commander",
-                version_description=f"This backup was created automatically by Supervisely after transferring labeled items from project ID: {src_project_id}",
+                version_description=f"This backup was created automatically by Supervisely after transferring annotated items from project ID: {src_project_id}",
             )
             if version:
                 logger.info(f"Latest Version: {version}")
@@ -1931,7 +1931,7 @@ def transfer_from_dataset(
     completed_jobs: Optional[List[Union[int, LabelingJobInfo]]] = None,
 ) -> Tuple[List[sly.ImageInfo], int]:
     """
-    Transfer labeled items from source dataset to destination dataset or project.
+    Transfer annotated items from source dataset to destination dataset or project.
     Iterate over all jobs in source dataset and collect accepted items in completed jobs.
     Additionally collect intersecting items from awaiting jobs to exclude them from transfer,
     because annotation process is not finished for this items.
@@ -2107,7 +2107,7 @@ def transfer_from_project(
     options: Options,
 ) -> sly.ProjectInfo:
     """
-    Transfer labeled images from source project to destination project or dataset.
+    Transfer annotated images from source project to destination project or dataset.
 
     :param src_project: Source project ID or ProjectInfo object.
     :param destination: Destination object with information about destination project or dataset.
@@ -2242,7 +2242,7 @@ def transfer_from_jobs(
     options: Options,
 ):
     """
-    Transfer labeled items from selected labeling jobs to destination project or dataset.
+    Transfer annotated items from selected labeling jobs to destination project or dataset.
     In this case we collect items only from selected and completed jobs excluding items from awaiting jobs.
 
     :param jobs: List of job IDs or LabelingJobInfo objects.
@@ -2287,7 +2287,7 @@ def transfer_from_jobs(
 
 def transfer_from_queue(queue_id: int, destination: Destination, options: Options, source: Source):
     """
-    Transfer labeled items from selected labeling queue to destination project or dataset.
+    Transfer annotated items from selected labeling queue to destination project or dataset.
     It is similar to transferring items from jobs, but in this case we collect items from all jobs in the queue.
 
     :param queue_id: Queue ID.

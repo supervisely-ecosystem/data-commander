@@ -26,13 +26,49 @@ Data Commander as a Service offers two main functionalities:
 2. **Transfer:**
    All annotated entities from `completed` Labeling Jobs with an `accepted` status are included in the transfer. During the process, entities are **copied** to the destination, and a new backup version of the destination project is created. The hierarchy is maintained where possible, making it easy to manage your data across various structures. The destination project definitions are also updated to reflect the changes.
 
-# Key features
+# Key Features
 
-### As a tool `Data Commander`:
+### As a Tool – **Data Commander**:
 
-### As a service **Move/Copy:**
+-   A separate interface in the style of a commander.
+-   Additional action settings that expand data interaction capabilities.
+-   Hotkeys similar to Norton or other similar commanders.
+-   A dedicated taskbar – everything is here and now.
+-   Data structure is preserved.
 
-### As a service **Transfer Annotated Items:**
+### As a Service – **Move/Copy**:
+
+-   Familiar Supervisely interface.
+-   Works with data: projects, datasets, and items.
+-   Simple copy and move actions without lengthy decision-making:
+    -   Data and their annotations move together.
+    -   If entities have matching names, they are not moved to avoid conflicts. For example, if an image with the same name already exists, neither it nor its annotation in the source project will overwrite the entity in the destination project.
+-   Data structure is preserved.
+
+### As a Service – **Transfer Annotated Items**:
+
+-   Familiar Supervisely interface.
+-   Copies items and their annotations from one location to another while maintaining structure.
+-   Copying can be initiated from: projects, datasets, labeling jobs, and queues.
+-   Copies only items that meet the following conditions:
+    -   Were annotated within a Labeling Job, and these jobs are marked **as completed**.
+    -   Were marked **as accepted** during review.
+    -   Have no remaining labeling jobs with this items in an unfinished status.
+-   Automatically resolves conflicts by renaming conflicting objects with a sequential index.
+
+**Hierarchy of Transfers and Result:**
+
+1. When initiating the process from the following instances, the system searches for related Labeling Jobs and exports items based on their results:
+
+    - **Project → Workspace** → A new project is created, preserving the structure.
+    - **Project → Project** → A dataset with the source project’s name is created in the destination project, preserving nesting.
+    - **Project → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
+    - **Dataset → Project** → A top-level dataset with the same name is created, containing only the items from that dataset (excluding nested datasets).
+    - **Dataset → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
+
+2. When initiating the process from the following instances, processing is limited to the specified Labeling Jobs, and items are exported based on their results:
+    - **Job** follows the same logic as **Dataset**. This means that if some items in an unrelated job have already been annotated and are in the required status, they will not be included.
+    - **Queue** follows the same logic as **Job**, but considers all its jobs as the only recognized completed ones.
 
 # How to use
 
