@@ -28,15 +28,15 @@ Data Commander as a Service offers two main functionalities:
 
 # Key Features
 
-### As a Tool – **Data Commander**:
+### As a Tool - **Data Commander**:
 
 -   A separate interface in the style of a commander.
 -   Additional action settings that expand data interaction capabilities.
 -   Hotkeys similar to Norton or other similar commanders.
--   A dedicated taskbar – everything is here and now.
+-   A dedicated taskbar - everything is here and now.
 -   Data structure is preserved.
 
-### As a Service – **Move/Copy**:
+### As a Service - **Move/Copy**:
 
 -   Familiar Supervisely interface.
 -   Works with data: projects, datasets, and items.
@@ -45,7 +45,7 @@ Data Commander as a Service offers two main functionalities:
     -   If entities have matching names, they are not moved to avoid conflicts. For example, if an image with the same name already exists, neither it nor its annotation in the source project will overwrite the entity in the destination project.
 -   Data structure is preserved.
 
-### As a Service – **Transfer Annotated Items**:
+### As a Service - **Transfer Annotated Items**:
 
 -   Familiar Supervisely interface.
 -   Copies items and their annotations from one location to another while maintaining structure.
@@ -61,7 +61,7 @@ Data Commander as a Service offers two main functionalities:
 1. When initiating the process from the following instances, the system searches for related Labeling Jobs and exports items based on their results:
 
     - **Project → Workspace** → A new project is created, preserving the structure.
-    - **Project → Project** → A dataset with the source project’s name is created in the destination project, preserving nesting.
+    - **Project → Project** → A dataset with the source project's name is created in the destination project, preserving nesting.
     - **Project → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
     - **Dataset → Project** → A top-level dataset with the same name is created, containing only the items from that dataset (excluding nested datasets).
     - **Dataset → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
@@ -76,11 +76,19 @@ Data Commander as a Service offers two main functionalities:
 
 1. Go to the `Data Commander`
 
+<img width="70%" src="https://github.com/user-attachments/assets/aae1e64c-50b2-4baa-b17b-b81861bfd9bf" />
+
 2. Navigate through the structures and select items
 
-3. Click on the buttons to perform actions
+<img width="70%" src="https://github.com/user-attachments/assets/367fced3-6a53-41e7-bd16-259566f64c80" />
+
+3. Click on the buttons to perform actions and select additional settings
+
+<img width="70%" src="https://github.com/user-attachments/assets/e57153d2-16c4-4ab4-8584-76598cb3c918" />
 
 4. Track the task progress in the progress bar
+
+<img width="70%" src="https://github.com/user-attachments/assets/a28bb909-12fa-4f95-a817-78d852671456" />
 
 ### As a service **Move/Copy:**
 
