@@ -76,25 +76,35 @@ Data Commander as a Service offers two main functionalities:
 
 1. Go to the `Data Commander`
 
-<img width="70%" src="https://github.com/user-attachments/assets/aae1e64c-50b2-4baa-b17b-b81861bfd9bf" />
+ <p align="center">
+    <img width="80%" src="https://github.com/user-attachments/assets/aae1e64c-50b2-4baa-b17b-b81861bfd9bf" />
+ </p>
 
 2. Navigate through the structures and select items
 
-<img width="70%" src="https://github.com/user-attachments/assets/367fced3-6a53-41e7-bd16-259566f64c80" />
+ <p align="center">
+ <img width="80%" src="https://github.com/user-attachments/assets/367fced3-6a53-41e7-bd16-259566f64c80" />
+ </p>
 
 3. Click on the buttons to perform actions and select additional settings
 
-<img width="70%" src="https://github.com/user-attachments/assets/e57153d2-16c4-4ab4-8584-76598cb3c918" />
+ <p align="center">
+ <img width="80%" src="https://github.com/user-attachments/assets/e57153d2-16c4-4ab4-8584-76598cb3c918" />
+ </p>
 
 4. Track the task progress in the progress bar
 
-<img width="70%" src="https://github.com/user-attachments/assets/a28bb909-12fa-4f95-a817-78d852671456" />
+ <p align="center">
+ <img width="80%" src="https://github.com/user-attachments/assets/a28bb909-12fa-4f95-a817-78d852671456" />
+ </p>
 
 ### As a service **Move/Copy:**
 
 1. In the `Projects` management section, select the projects, datasets or items and tick the required checkboxes.
 
-<img width="70%" src="https://github.com/user-attachments/assets/bdb91202-6d15-404e-9896-556608fc2f32" />
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/bdb91202-6d15-404e-9896-556608fc2f32" />
+</p>
 
 2. A new button will appear in the header: `With N selected`.
 
@@ -104,11 +114,15 @@ Data Commander as a Service offers two main functionalities:
    You can create a new project or dataset during this process. <br>
    Info tip will help you to understand the process. Select the desired destination and click the `Move` or `Copy` button.
 
-<img width="70%" src="https://github.com/user-attachments/assets/21b4e127-b7d6-4aa7-95fe-ebb19eaab7f4" />
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/21b4e127-b7d6-4aa7-95fe-ebb19eaab7f4" />
+</p>
 
 5. You will be redirected to the Tasks page to track the task progress.
 
-<img width="70%" src="https://github.com/user-attachments/assets/7f5c1667-1622-482a-9fe4-52c738d749b4" />
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/7f5c1667-1622-482a-9fe4-52c738d749b4" />
+</p>
 
 ### As a service **Transfer Annotated Items:**
 
