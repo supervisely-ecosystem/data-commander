@@ -55,6 +55,7 @@ Data Commander as a Service offers two main functionalities:
     -   Were marked **as accepted** during review.
     -   Have no remaining labeling jobs with this items in an unfinished status.
 -   Automatically resolves conflicts by renaming conflicting objects with a sequential index.
+-   Automatically creates a backup version for the destination project, allowing you to create a copy of the project at any time with the same state it had after the transfer and run experiments on the exact same data. `Сurrently only for images`
 
 **Hierarchy of Transfers and Result:**
 
@@ -74,25 +75,25 @@ Data Commander as a Service offers two main functionalities:
 
 ### As a tool `Data Commander`:
 
-1. Go to the `Data Commander`
+**1.** Go to the `Data Commander`
 
  <p align="center">
     <img width="80%" src="https://github.com/user-attachments/assets/aae1e64c-50b2-4baa-b17b-b81861bfd9bf" />
  </p>
 
-2. Navigate through the structures and select items
+**2.** Navigate through the structures and select items
 
  <p align="center">
  <img width="80%" src="https://github.com/user-attachments/assets/367fced3-6a53-41e7-bd16-259566f64c80" />
  </p>
 
-3. Click on the buttons to perform actions and select additional settings
+**3.** Click on the buttons to perform actions and select additional settings
 
  <p align="center">
  <img width="80%" src="https://github.com/user-attachments/assets/e57153d2-16c4-4ab4-8584-76598cb3c918" />
  </p>
 
-4. Track the task progress in the progress bar
+**4.** Track the task progress in the progress bar
 
  <p align="center">
  <img width="80%" src="https://github.com/user-attachments/assets/a28bb909-12fa-4f95-a817-78d852671456" />
@@ -100,25 +101,25 @@ Data Commander as a Service offers two main functionalities:
 
 ### As a service **Move/Copy:**
 
-1. In the `Projects` management section, select the projects, datasets or items and tick the required checkboxes.
+**1.** In the `Projects` management section, select the projects, datasets or items and tick the required checkboxes.
 
 <p align="center">
 <img width="80%" src="https://github.com/user-attachments/assets/bdb91202-6d15-404e-9896-556608fc2f32" />
 </p>
 
-2. A new button will appear in the header: `With N selected`.
+**2.** A new button will appear in the header: `With N selected`.
 
-3. Choose the `Move selected` action or `Copy selected`
+**3.** Choose the `Move selected` action or `Copy selected`
 
-4. A modal window will appear, allowing you to select the destination for the items. <br>
-   You can create a new project or dataset during this process. <br>
-   Info tip will help you to understand the process. Select the desired destination and click the `Move` or `Copy` button.
+**4.** A modal window will appear, allowing you to select the destination for the items. <br>
+You can create a new project or dataset during this process. <br>
+Info tip will help you to understand the process. Select the desired destination and click the `Move` or `Copy` button.
 
 <p align="center">
 <img width="80%" src="https://github.com/user-attachments/assets/21b4e127-b7d6-4aa7-95fe-ebb19eaab7f4" />
 </p>
 
-5. You will be redirected to the Tasks page to track the task progress.
+**5.** You will be redirected to the **Tasks** page to track the task progress.
 
 <p align="center">
 <img width="80%" src="https://github.com/user-attachments/assets/7f5c1667-1622-482a-9fe4-52c738d749b4" />
@@ -126,10 +127,52 @@ Data Commander as a Service offers two main functionalities:
 
 ### As a service **Transfer Annotated Items:**
 
-1. In the `Projects` management section, select the projects or datasets and tick the required checkboxes.
+**1.** In the `Projects` management section, select the projects or datasets and tick the required checkboxes.
 
-2. A new button will appear in the header: `With N selected`.
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/ac10e0d3-3595-4a7e-a375-822e8ec0d65c" />
+</p>
 
-3. Choose the `Transfer annotated items` action.
+**2.** A new button will appear in the header: `With N selected`.
 
-4. A modal window will appear, allowing you to select the destination for the items. You can create a new project or dataset during this process. Select the desired destination and click the `Transfer` button.
+**3.** Choose the `Transfer annotated items` action.
+
+**4.** A modal window will appear, allowing you to select the destination for the items. <br>
+You can create a new project or dataset during this process. <br>
+Select the desired destination and click the `Transfer` button.
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/1d586153-a2a6-426a-adad-8774c2830a34" />
+</p>
+
+The image shows that it is not possible to move annotated items to the workspace level, and the `Transfer` button is disabled. To see the available options, check the tooltip. For more details, follow the link from the tooltip.
+
+**5.** Once you select the correct directory and click the **Transfer** button, you will be redirected to the **Tasks** page to track the task progress.
+
+**Transferring Process Explained**
+
+Once the processing of datasets selected in **Step 1** begins, the system will search for related **Labeling Jobs**, and items marked as `accepted` only in `completed` jobs will be transferred.
+
+In our case, we have job `#1`, which is completed, and **30** items have been marked as `accepted`. However, there is also a second job `#2` for the same dataset, which is still in the `on review` stage. Since both jobs contain the same set of items, no items will be transferred for this dataset until job `#2` is `completed`, even though items in job `#1` are already `accepted`.
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/23019ef3-83d7-4bcf-a75e-f0c553873ddc" />
+</p>
+
+Once job `#2` is `completed` and these items are no longer associated with any other job, a repeat transferring operation will export all items marked as `accepted` across all `completed` jobs for this dataset, even if some of items were marked as `rejected` in other completed jobs.
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/86f6a67b-119b-45b7-a562-f0df4c6b697b" />
+</p>
+
+As a result, we will obtain annotated items with approved annotations. 40 items in the result indicate that, out of 13 accepted items from job `#2`, 10 were unique, while 3 were also among the accepted items in job `#1`.
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/b36ae58f-a09a-4051-9e39-a5ad7aa88e00" />
+</p>
+
+Additionally, since the example project is an image-based project, a backup version is automatically created when new images are transferred into it.
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/403af482-7934-4e48-bef6-b52c36ab4392" />
+</p>
