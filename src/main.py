@@ -1077,7 +1077,9 @@ def merge_project_meta(src_project_id, dst_project_id):
             dst_project_meta = dst_project_meta.add_tag_meta(tag_meta)
             changed = True
         elif dst_tag_meta.value_type != tag_meta.value_type:
-            raise ValueError("Tag Metas are incompatible")
+            raise ValueError(
+                f"Destination and source metas for tag '{tag_meta.name}' are incompatible: {dst_tag_meta.value_type} != {tag_meta.value_type}"
+            )
         elif dst_tag_meta.possible_values != tag_meta.possible_values:
             all_possible_values = list(set(dst_tag_meta.possible_values + tag_meta.possible_values))
             dst_tag_meta = dst_tag_meta.clone(possible_values=all_possible_values)
@@ -1236,7 +1238,8 @@ def copy_project_with_replace(
         # copy project to existing project or existing dataset
         project_meta = merge_project_meta(src_project_info.id, dst_project_id)
         created_dataset = run_in_executor(
-            api.dataset.create,
+            api_utils.create_dataset,
+            api,
             dst_project_id,
             src_project_info.name,
             src_project_info.description,
@@ -1322,7 +1325,8 @@ def copy_project_with_skip(
             return []
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
         created_dataset = run_in_executor(
-            api.dataset.create,
+            api_utils.create_dataset,
+            api,
             dst_project_id,
             src_project_info.name,
             src_project_info.description,
@@ -1418,7 +1422,8 @@ def copy_project(
     if dst_project_id is not None:
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
         created_dataset = run_in_executor(
-            api.dataset.create,
+            api_utils.create_dataset,
+            api,
             dst_project_id,
             src_project_info.name,
             src_project_info.description,
