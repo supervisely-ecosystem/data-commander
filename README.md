@@ -4,6 +4,12 @@
 
 # Data Commander
 
+<p align="center">
+  <a href="#Overview">Overview</a> •
+  <a href="#Key-Features">Key Features</a> •
+  <a href="#How-to-Use">How to Use</a>
+</p>
+
 [![](https://img.shields.io/badge/supervisely-ecosystem-brightgreen)](https://ecosystem.supervisely.com/apps/supervisely-ecosystem/data-commander)
 [![](https://img.shields.io/badge/slack-chat-green.svg?logo=slack)](https://supervisely.com/slack)
 ![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/supervisely-ecosystem/data-commander)
@@ -71,7 +77,7 @@ Data Commander as a Service offers two main functionalities:
     - **Job** follows the same logic as **Dataset**. This means that if some items in an unrelated job have already been annotated and are in the required status, they will not be included.
     - **Queue** follows the same logic as **Job**, but considers all its jobs as the only recognized completed ones.
 
-# How to use
+# How to Use
 
 ### As a tool `Data Commander`:
 
