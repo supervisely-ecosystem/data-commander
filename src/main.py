@@ -1066,7 +1066,13 @@ def merge_project_meta(src_project_id, dst_project_id):
         if dst_obj_class is None:
             dst_project_meta = dst_project_meta.add_obj_class(obj_class)
             changed = True
-        elif dst_obj_class.geometry_type != obj_class.geometry_type:
+        elif (
+            dst_obj_class.geometry_type != obj_class.geometry_type
+            and dst_obj_class.geometry_type != sly.AnyGeometry
+        ):
+            if obj_class.geometry_type == sly.GraphNodes:
+                raise ValueError(f"Cannot merge GraphNodes with {dst_obj_class.geometry_type}")            
+            api.object_class.update(dst_obj_class.sly_id, geometry=sly.AnyGeometry.name())
             dst_obj_class = dst_obj_class.clone(geometry_type=sly.AnyGeometry)
             dst_project_meta = dst_project_meta.delete_obj_class(obj_class.name)
             dst_project_meta = dst_project_meta.add_obj_class(dst_obj_class)
