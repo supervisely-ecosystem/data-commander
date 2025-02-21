@@ -1912,7 +1912,7 @@ def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_proj
 
 def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: int = None):
     """
-    Assign workflow to source and destination projects.
+    Assign MLOps Workflow to source and destination projects.
     """
     src_report = api.app.workflow.add_input_project(src_project_id, task_id=TASK_ID)
     dst_report = api.app.workflow.add_output_project(
@@ -1920,7 +1920,7 @@ def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: in
     )
     if src_report != {} and dst_report != {}:
         logger.info(
-            f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_id}"
+            f"MLOps Workflow saved for source and destination project ID: {src_project_id} → ID: {dst_project_id}"
         )
 
 
@@ -1986,7 +1986,7 @@ def transfer_from_dataset(
 
     logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     if src_project is None:
-        logger.info("Getting source ProjectInfo info by dataset ID")
+        logger.debug("Getting source ProjectInfo info by dataset ID")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
     elif isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
@@ -2083,7 +2083,7 @@ def transfer_from_dataset(
     item_infos = get_item_infos(
         dataset_id=src_dataset.id, item_ids=move_ids, project_type=src_project.type
     )
-    progress_clone = tqdm(desc="Transfering items", total=len(item_infos))
+    progress_clone = tqdm(desc="Transferring items", total=len(item_infos))
     created_items = clone_items(
         src_dataset_id=src_dataset.id,
         dst_dataset_id=target_dataset.id,
@@ -2212,6 +2212,7 @@ def transfer_from_project(
         created_items, _ = transfer_from_dataset(
             src_dataset=src_ds,
             destination=destination,  # doesn't matter for this case
+            src_project=src_project,
             options=options,
             update_meta=False,
             target_dataset=dst_ds,
