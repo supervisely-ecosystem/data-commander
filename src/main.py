@@ -2243,7 +2243,7 @@ def transfer_from_project(
                     f"⚠️ Failed to remove dataset ID: {ds_id} with name '{ids_map[ds_id].name}'. It seems that dataset already removed"
                 )
 
-    if destination.level == Level.PROJECT and all(
+    if destination.level in (Level.PROJECT, Level.DATASET) and all(
         to_delete is True for to_delete in dataset_deletion_map.values()
     ):
         logger.info(
