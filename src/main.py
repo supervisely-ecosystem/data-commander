@@ -1071,7 +1071,7 @@ def merge_project_meta(src_project_id, dst_project_id):
             and dst_obj_class.geometry_type != sly.AnyGeometry
         ):
             if obj_class.geometry_type == sly.GraphNodes:
-                raise ValueError(f"Cannot merge GraphNodes with {dst_obj_class.geometry_type}")            
+                raise ValueError(f"Cannot merge GraphNodes with {dst_obj_class.geometry_type}")
             api.object_class.update(dst_obj_class.sly_id, geometry=sly.AnyGeometry.name())
             dst_obj_class = dst_obj_class.clone(geometry_type=sly.AnyGeometry)
             dst_project_meta = dst_project_meta.delete_obj_class(obj_class.name)
@@ -2242,6 +2242,24 @@ def transfer_from_project(
                 logger.info(
                     f"⚠️ Failed to remove dataset ID: {ds_id} with name '{ids_map[ds_id].name}'. It seems that dataset already removed"
                 )
+
+    if destination.level == Level.WORKSPACE and all(
+        to_delete is True for to_delete in dataset_deletion_map.values()
+    ):
+        logger.info(
+            f"All destination datasets were deleted. Removing parent dataset ID: {dst_dataset.id} with name '{dst_dataset.name}'"
+        )
+        api.dataset.remove(dst_dataset.id)
+        dst_project = None
+        
+    elif destination.level == Level.WORKSPACE and all(
+        to_delete is True for to_delete in dataset_deletion_map.values()
+    ):
+        logger.info(
+            f"All destination datasets were deleted. Removing project ID: {dst_project.id} with name '{dst_project.name}'"
+        )
+        api.project.remove(dst_project.id)
+        dst_project = None
 
     logger.info(f"Finished processing project ID: {src_project.id} with name '{src_project.name}'")
 
