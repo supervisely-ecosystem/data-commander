@@ -974,6 +974,7 @@ def create_dataset_recursively(
                     api.dataset.get_list, dst_project_id, parent_id=dst_parent_id
                 )
                 if any(ds.name == dataset_info.name for ds in existing):
+                    logger.info("Dataset already exists", extra={"dataset_name": dataset_info.name})
                     return CreatedDataset(dataset_info, None, conflict_resolution_result="skipped")
             created_info = run_in_executor(
                 api_utils.create_dataset,
@@ -1343,11 +1344,17 @@ def copy_project_with_skip(
     created_datasets = []
     if dst_project_id is not None:
         if datasets_tree is None:
-            datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
+            datasets_tree = run_in_executor(api.dataset.get_tree, dst_project_id)
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         if src_project_info.name in [ds.name for ds in existing_datasets]:
             progress_cb(src_project_info.items_count)
-            logger.info("Dataset with the same name already exists. Skipping")
+            logger.info(
+                "Dataset with the same name already exists. Skipping",
+                extra={
+                    "project_name": src_project_info.name,
+                    "existing_datasets": [ds.name for ds in existing_datasets],
+                },
+            )
             return []
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
         created_dataset = run_in_executor(
