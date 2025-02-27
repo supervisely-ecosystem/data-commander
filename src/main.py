@@ -1121,40 +1121,43 @@ def merge_project_meta(src_project_id, dst_project_id):
             raise ValueError(
                 f"Destination and source metas for tag '{tag_meta.name}' are incompatible: {dst_tag_meta.value_type} != {tag_meta.value_type}"
             )
-        changes = {}
-        if dst_tag_meta.possible_values != tag_meta.possible_values:
-            all_possible_values = list(set(dst_tag_meta.possible_values + tag_meta.possible_values))
-            changes["possible_values"] = all_possible_values
-            changed = True
-        if (
-            tag_meta.applicable_to != dst_tag_meta.applicable_to
-            and dst_tag_meta.applicable_to != TagApplicableTo.ALL
-        ):
-            changes["applicable_to"] = TagApplicableTo.ALL
-            changed = True
-        if (
-            tag_meta.target_type != dst_tag_meta.target_type
-            and dst_tag_meta.target_type != TagTargetType.ALL
-        ):
-            changes["target_type"] = TagTargetType.ALL
-            changed = True
-        if tag_meta.applicable_classes != dst_tag_meta.applicable_classes:
-            if (
-                dst_tag_meta.applicable_to == TagApplicableTo.OBJECTS_ONLY
-                or changes.get("applicable_to") == TagApplicableTo.OBJECTS_ONLY
-            ):
-                all_applicable_classes = list(
-                    set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
+        else:
+            changes = {}
+            if dst_tag_meta.possible_values != tag_meta.possible_values:
+                all_possible_values = list(
+                    set(dst_tag_meta.possible_values + tag_meta.possible_values)
                 )
-                changes["applicable_classes"] = all_applicable_classes
+                changes["possible_values"] = all_possible_values
                 changed = True
-        if changes:
-            dst_tag_meta = dst_tag_meta.clone(**changes)
-            dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
-            dst_project_meta = dst_project_meta.add_tag_meta(dst_tag_meta)
-            logger.info(
-                f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
-            )
+            if (
+                tag_meta.applicable_to != dst_tag_meta.applicable_to
+                and dst_tag_meta.applicable_to != TagApplicableTo.ALL
+            ):
+                changes["applicable_to"] = TagApplicableTo.ALL
+                changed = True
+            if (
+                tag_meta.target_type != dst_tag_meta.target_type
+                and dst_tag_meta.target_type != TagTargetType.ALL
+            ):
+                changes["target_type"] = TagTargetType.ALL
+                changed = True
+            if tag_meta.applicable_classes != dst_tag_meta.applicable_classes:
+                if (
+                    dst_tag_meta.applicable_to == TagApplicableTo.OBJECTS_ONLY
+                    or changes.get("applicable_to") == TagApplicableTo.OBJECTS_ONLY
+                ):
+                    all_applicable_classes = list(
+                        set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
+                    )
+                    changes["applicable_classes"] = all_applicable_classes
+                    changed = True
+            if changes:
+                dst_tag_meta = dst_tag_meta.clone(**changes)
+                dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
+                dst_project_meta = dst_project_meta.add_tag_meta(dst_tag_meta)
+                logger.info(
+                    f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
+                )
     return (
         api.project.update_meta(dst_project_id, dst_project_meta) if changed else dst_project_meta
     )
