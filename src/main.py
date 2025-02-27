@@ -10,6 +10,7 @@ from supervisely import logger
 import supervisely as sly
 from tqdm import tqdm
 from supervisely.api.labeling_job_api import LabelingJobInfo
+from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
 
 
 import api_utils as api_utils
@@ -1088,33 +1089,68 @@ def merge_project_meta(src_project_id, dst_project_id):
         dst_obj_class: sly.ObjClass = dst_project_meta.obj_classes.get(obj_class.name)
         if dst_obj_class is None:
             dst_project_meta = dst_project_meta.add_obj_class(obj_class)
+            logger.info(
+                f"Added object class '{obj_class.name}' of type '{obj_class.geometry_type.name()}' to destination project"
+            )
             changed = True
         elif (
             dst_obj_class.geometry_type != obj_class.geometry_type
             and dst_obj_class.geometry_type != sly.AnyGeometry
         ):
             if obj_class.geometry_type == sly.GraphNodes:
-                raise ValueError(f"Cannot merge GraphNodes with {dst_obj_class.geometry_type}")
+                raise ValueError(
+                    f"Cannot merge {sly.GraphNodes.name()} with {dst_obj_class.geometry_type}"
+                )
             api.object_class.update(dst_obj_class.sly_id, shape=sly.AnyGeometry.name())
             dst_obj_class = dst_obj_class.clone(geometry_type=sly.AnyGeometry)
             dst_project_meta = dst_project_meta.delete_obj_class(obj_class.name)
             dst_project_meta = dst_project_meta.add_obj_class(dst_obj_class)
+            logger.info(
+                f"Changed geometry type of object class '{obj_class.name}' to '{sly.AnyGeometry.name()}' in destination project"
+            )
             changed = True
     for tag_meta in src_project_meta.tag_metas:
         dst_tag_meta = dst_project_meta.get_tag_meta(tag_meta.name)
         if dst_tag_meta is None:
             dst_project_meta = dst_project_meta.add_tag_meta(tag_meta)
+            logger.info(
+                f"Added tag '{tag_meta.name}' of type '{tag_meta.value_type}' to destination project"
+            )
             changed = True
         elif dst_tag_meta.value_type != tag_meta.value_type:
             raise ValueError(
                 f"Destination and source metas for tag '{tag_meta.name}' are incompatible: {dst_tag_meta.value_type} != {tag_meta.value_type}"
             )
-        elif dst_tag_meta.possible_values != tag_meta.possible_values:
+        changes = {}
+        if dst_tag_meta.possible_values != tag_meta.possible_values:
             all_possible_values = list(set(dst_tag_meta.possible_values + tag_meta.possible_values))
-            dst_tag_meta = dst_tag_meta.clone(possible_values=all_possible_values)
+            changes["possible_values"] = all_possible_values
+            changed = True
+        if (
+            tag_meta.applicable_to != dst_tag_meta.applicable_to
+            and dst_tag_meta.applicable_to != TagApplicableTo.ALL
+        ):
+            changes["applicable_to"] = TagApplicableTo.ALL
+            changed = True
+        if (
+            tag_meta.target_type == dst_tag_meta.target_type
+            and dst_tag_meta.target_type != TagTargetType.ALL
+        ):
+            changes["target_type"] = TagTargetType.ALL
+            changed = True
+        if tag_meta.applicable_classes != dst_tag_meta.applicable_classes:
+            all_applicable_classes = list(
+                set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
+            )
+            changes["applicable_classes"] = all_applicable_classes
+            changed = True
+        if changes:
+            dst_tag_meta = dst_tag_meta.clone(**changes)
             dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
             dst_project_meta = dst_project_meta.add_tag_meta(dst_tag_meta)
-            changed = True
+            logger.info(
+                f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
+            )
     return (
         api.project.update_meta(dst_project_id, dst_project_meta) if changed else dst_project_meta
     )
