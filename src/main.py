@@ -1632,10 +1632,11 @@ def move_datasets_tree(
         logger.info("No datasets created. Skipping deletion", extra={"dataset_id": dst_dataset_id})
         return []
     # remove only top level datasets, for which a copy was created
+    srs_datasets_ids = [ds.id for ds in datasets_tree]
     datasets_to_remove = [
         ds.src
         for ds in creted_datasets
-        if ds.dst_dataset is not None and ds.src.id in datasets_tree
+        if ds.dst_dataset is not None and ds.src.id in srs_datasets_ids
     ]
     if len(datasets_to_remove) == 0:
         logger.info("No datasets to remove", extra={"dataset_id": dst_dataset_id})
