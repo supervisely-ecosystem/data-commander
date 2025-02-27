@@ -1133,7 +1133,7 @@ def merge_project_meta(src_project_id, dst_project_id):
             changes["applicable_to"] = TagApplicableTo.ALL
             changed = True
         if (
-            tag_meta.target_type == dst_tag_meta.target_type
+            tag_meta.target_type != dst_tag_meta.target_type
             and dst_tag_meta.target_type != TagTargetType.ALL
         ):
             changes["target_type"] = TagTargetType.ALL
@@ -1142,10 +1142,10 @@ def merge_project_meta(src_project_id, dst_project_id):
             if (
                 dst_tag_meta.applicable_to == TagApplicableTo.OBJECTS_ONLY
                 or changes.get("applicable_to") == TagApplicableTo.OBJECTS_ONLY
-            ):                
+            ):
                 all_applicable_classes = list(
                     set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
-                )            
+                )
                 changes["applicable_classes"] = all_applicable_classes
                 changed = True
         if changes:
