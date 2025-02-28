@@ -1123,34 +1123,39 @@ def merge_project_meta(src_project_id, dst_project_id):
             )
         else:
             changes = {}
+            # Check if values for "Single choice (One of)" are different
             if dst_tag_meta.possible_values != tag_meta.possible_values:
                 all_possible_values = list(
                     set(dst_tag_meta.possible_values + tag_meta.possible_values)
                 )
                 changes["possible_values"] = all_possible_values
                 changed = True
+            # Check if "Applicable to" is different
             if (
                 tag_meta.applicable_to != dst_tag_meta.applicable_to
                 and dst_tag_meta.applicable_to != TagApplicableTo.ALL
             ):
                 changes["applicable_to"] = TagApplicableTo.ALL
                 changed = True
+            # Check if "Target type" is different
             if (
                 tag_meta.target_type != dst_tag_meta.target_type
                 and dst_tag_meta.target_type != TagTargetType.ALL
             ):
                 changes["target_type"] = TagTargetType.ALL
                 changed = True
+            # Check if "Classes" are different for "Applicable to" == "Objects only"
             if tag_meta.applicable_classes != dst_tag_meta.applicable_classes:
                 if (
                     dst_tag_meta.applicable_to == TagApplicableTo.OBJECTS_ONLY
                     or changes.get("applicable_to") == TagApplicableTo.OBJECTS_ONLY
-                ):
+                ) and dst_tag_meta.applicable_classes != []:
                     all_applicable_classes = list(
                         set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
                     )
                     changes["applicable_classes"] = all_applicable_classes
                     changed = True
+
             if changes:
                 dst_tag_meta = dst_tag_meta.clone(**changes)
                 dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
@@ -2258,6 +2263,12 @@ def transfer_from_project(
     original_description = (
         f"Original description: {src_project.description}" if src_project.description else ""
     )
+
+    if options.conflict_resolution_mode != JSONKEYS.CONFLICT_RENAME:
+        raise NotImplementedError(
+            f"Conflict resolution mode '{options.conflict_resolution_mode}' is not implemented for Transferring Annotated Items"
+        )
+
     if (
         destination.level == Level.WORKSPACE
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
