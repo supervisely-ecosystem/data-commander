@@ -10,6 +10,7 @@ from supervisely import logger
 import supervisely as sly
 from tqdm import tqdm
 from supervisely.api.labeling_job_api import LabelingJobInfo
+from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
 
 
 import api_utils as api_utils
@@ -1088,27 +1089,84 @@ def merge_project_meta(src_project_id, dst_project_id):
         dst_obj_class: sly.ObjClass = dst_project_meta.obj_classes.get(obj_class.name)
         if dst_obj_class is None:
             dst_project_meta = dst_project_meta.add_obj_class(obj_class)
+            logger.info(
+                f"Added object class '{obj_class.name}' of type '{obj_class.geometry_type.name()}' to destination project"
+            )
             changed = True
-        elif dst_obj_class.geometry_type != obj_class.geometry_type:
+        elif (
+            dst_obj_class.geometry_type != obj_class.geometry_type
+            and dst_obj_class.geometry_type != sly.AnyGeometry
+        ):
+            if obj_class.geometry_type == sly.GraphNodes:
+                raise ValueError(
+                    f"Cannot merge {sly.GraphNodes.name()} with {dst_obj_class.geometry_type}"
+                )
+            api.object_class.update(dst_obj_class.sly_id, shape=sly.AnyGeometry.name())
             dst_obj_class = dst_obj_class.clone(geometry_type=sly.AnyGeometry)
             dst_project_meta = dst_project_meta.delete_obj_class(obj_class.name)
             dst_project_meta = dst_project_meta.add_obj_class(dst_obj_class)
+            logger.info(
+                f"Changed geometry type of object class '{obj_class.name}' to '{sly.AnyGeometry.name()}' in destination project"
+            )
             changed = True
     for tag_meta in src_project_meta.tag_metas:
         dst_tag_meta = dst_project_meta.get_tag_meta(tag_meta.name)
         if dst_tag_meta is None:
             dst_project_meta = dst_project_meta.add_tag_meta(tag_meta)
+            logger.info(
+                f"Added tag '{tag_meta.name}' of type '{tag_meta.value_type}' to destination project"
+            )
             changed = True
         elif dst_tag_meta.value_type != tag_meta.value_type:
             raise ValueError(
                 f"Destination and source metas for tag '{tag_meta.name}' are incompatible: {dst_tag_meta.value_type} != {tag_meta.value_type}"
             )
-        elif dst_tag_meta.possible_values != tag_meta.possible_values:
-            all_possible_values = list(set(dst_tag_meta.possible_values + tag_meta.possible_values))
-            dst_tag_meta = dst_tag_meta.clone(possible_values=all_possible_values)
-            dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
-            dst_project_meta = dst_project_meta.add_tag_meta(dst_tag_meta)
-            changed = True
+        else:
+            changes = {}
+            # Check if values for "Single choice (One of)" are different
+            if dst_tag_meta.possible_values != tag_meta.possible_values:
+                all_possible_values = list(
+                    set(dst_tag_meta.possible_values + tag_meta.possible_values)
+                )
+                changes["possible_values"] = all_possible_values
+                changed = True
+            # Check if "Applicable to" is different
+            if (
+                tag_meta.applicable_to != dst_tag_meta.applicable_to
+                and dst_tag_meta.applicable_to != TagApplicableTo.ALL
+            ):
+                changes["applicable_to"] = TagApplicableTo.ALL
+                changed = True
+            # Check if "Target type" is different
+            if (
+                tag_meta.target_type != dst_tag_meta.target_type
+                and dst_tag_meta.target_type != TagTargetType.ALL
+            ):
+                changes["target_type"] = TagTargetType.ALL
+                changed = True
+            # Check if "Classes" are different for "Applicable to" == "Objects only"
+            if tag_meta.applicable_classes != dst_tag_meta.applicable_classes:
+                if (
+                    dst_tag_meta.applicable_to == TagApplicableTo.OBJECTS_ONLY
+                    or changes.get("applicable_to") == TagApplicableTo.OBJECTS_ONLY
+                ):
+                    if tag_meta.applicable_classes == []:
+                        changes["applicable_classes"] = []
+                        changed = True
+                    elif dst_tag_meta.applicable_classes != []:
+                        all_applicable_classes = list(
+                            set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
+                        )
+                        changes["applicable_classes"] = all_applicable_classes
+                        changed = True
+
+            if changes:
+                dst_tag_meta = dst_tag_meta.clone(**changes)
+                dst_project_meta = dst_project_meta.delete_tag_meta(tag_meta.name)
+                dst_project_meta = dst_project_meta.add_tag_meta(dst_tag_meta)
+                logger.info(
+                    f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
+                )
     return (
         api.project.update_meta(dst_project_id, dst_project_meta) if changed else dst_project_meta
     )
@@ -1986,7 +2044,7 @@ def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_proj
 
 def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: int = None):
     """
-    Assign workflow to source and destination projects.
+    Assign MLOps Workflow to source and destination projects.
     """
     src_report = api.app.workflow.add_input_project(src_project_id, task_id=TASK_ID)
     dst_report = api.app.workflow.add_output_project(
@@ -1994,7 +2052,7 @@ def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: in
     )
     if src_report != {} and dst_report != {}:
         logger.info(
-            f"Workflow saved for SRC Project ID: {src_project_id} -> DST Project ID: {dst_project_id}"
+            f"MLOps Workflow saved for source and destination project ID: {src_project_id} → ID: {dst_project_id}"
         )
 
 
@@ -2060,7 +2118,7 @@ def transfer_from_dataset(
 
     logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
     if src_project is None:
-        logger.info("Getting source ProjectInfo info by dataset ID")
+        logger.debug("Getting source ProjectInfo info by dataset ID")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
     elif isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
@@ -2157,7 +2215,7 @@ def transfer_from_dataset(
     item_infos = get_item_infos(
         dataset_id=src_dataset.id, item_ids=move_ids, project_type=src_project.type
     )
-    progress_clone = tqdm(desc="Transfering items", total=len(item_infos))
+    progress_clone = tqdm(desc="Transferring items", total=len(item_infos))
     created_items = clone_items(
         src_dataset_id=src_dataset.id,
         dst_dataset_id=target_dataset.id,
@@ -2210,6 +2268,12 @@ def transfer_from_project(
     original_description = (
         f"Original description: {src_project.description}" if src_project.description else ""
     )
+
+    if options.conflict_resolution_mode != JSONKEYS.CONFLICT_RENAME:
+        raise NotImplementedError(
+            f"Conflict resolution mode '{options.conflict_resolution_mode}' is not implemented for Transferring Annotated Items"
+        )
+
     if (
         destination.level == Level.WORKSPACE
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
@@ -2292,6 +2356,7 @@ def transfer_from_project(
         created_items, _ = transfer_from_dataset(
             src_dataset=src_ds,
             destination=destination,  # doesn't matter for this case
+            src_project=src_project,
             options=options,
             update_meta=False,
             target_dataset=dst_ds,
@@ -2315,6 +2380,24 @@ def transfer_from_project(
                 logger.info(
                     f"⚠️ Failed to remove dataset ID: {ds_id} with name '{ids_map[ds_id].name}'. It seems that dataset already removed"
                 )
+
+    if destination.level in (Level.PROJECT, Level.DATASET) and all(
+        to_delete is True for to_delete in dataset_deletion_map.values()
+    ):
+        logger.info(
+            f"All destination datasets were deleted. Removing parent dataset ID: {dst_dataset.id} with name '{dst_dataset.name}'"
+        )
+        api.dataset.remove(dst_dataset.id)
+        dst_project = None
+
+    elif destination.level == Level.WORKSPACE and all(
+        to_delete is True for to_delete in dataset_deletion_map.values()
+    ):
+        logger.info(
+            f"All destination datasets were deleted. Removing project ID: {dst_project.id} with name '{dst_project.name}'"
+        )
+        api.project.remove(dst_project.id)
+        dst_project = None
 
     logger.info(f"Finished processing project ID: {src_project.id} with name '{src_project.name}'")
 

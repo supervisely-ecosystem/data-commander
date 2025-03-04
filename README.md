@@ -1,6 +1,6 @@
 <div align="center" markdown>
 
-<img src="https://github.com/user-attachments/assets/09252852-3f49-4bad-b665-14e52458e4c0" style="width: 65%;"/>
+<img src="https://github.com/user-attachments/assets/09252852-3f49-4bad-b665-14e52458e4c0" style="width: 70%;"/>
 
 # Data Commander
 
@@ -55,13 +55,15 @@ Data Commander as a Service offers two main functionalities:
 
 -   Familiar Supervisely interface.
 -   Copies items and their annotations from one location to another while maintaining structure.
--   Copying can be initiated from: projects, datasets, labeling jobs, and queues.
+-   Copying can be initiated from: projects, datasets, labeling jobs*, and queues*.
 -   Copies only items that meet the following conditions:
     -   Were annotated within a Labeling Job, and these jobs are marked **as completed**.
     -   Were marked **as accepted** during review.
     -   Have no remaining labeling jobs with this items in an unfinished status.
 -   Automatically resolves conflicts by renaming conflicting objects with a sequential index.
 -   Automatically creates a backup version for the destination project, allowing you to create a copy of the project at any time with the same state it had after the transfer and run experiments on the exact same data. `Сurrently only for images`
+
+\* - coming soon
 
 **Hierarchy of Transfers and Result:**
 
@@ -70,10 +72,10 @@ Data Commander as a Service offers two main functionalities:
     - **Project → Workspace** → A new project is created, preserving the structure.
     - **Project → Project** → A dataset with the source project's name is created in the destination project, preserving nesting.
     - **Project → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
-    - **Dataset → Project** → A top-level dataset with the same name is created, containing only the items from that dataset (excluding nested datasets).
+    - **Dataset → Project** → A top-level dataset with the same name is created, containing only the items from that dataset (excluding nested datasets). You can also choose a few nested datasets - they will be transferred on the same destination level, creating a flat structure.
     - **Dataset → Dataset** → Similar to the previous point, but the dataset is nested inside the destination dataset.
 
-2. When initiating the process from the following instances, processing is limited to the specified Labeling Jobs, and items are exported based on their results:
+2. `Coming soon` When initiating the process from the following instances, processing is limited to the specified Labeling Jobs, and items are exported based on their results:
     - **Job** follows the same logic as **Dataset**. This means that if some items in an unrelated job have already been annotated and are in the required status, they will not be included.
     - **Queue** follows the same logic as **Job**, but considers all its jobs as the only recognized completed ones.
 
@@ -113,6 +115,12 @@ Data Commander as a Service offers two main functionalities:
 <img width="80%" src="https://github.com/user-attachments/assets/bdb91202-6d15-404e-9896-556608fc2f32" />
 </p>
 
+also if you are managing one project or dataset, it is possible to open the **Organize** menu from the context menu
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/87ced130-3916-486c-a3a6-9ecf656294cd" />
+</p>
+
 **2.** A new button will appear in the header: `With N selected`.
 
 **3.** Choose the `Move selected` action or `Copy selected`
@@ -137,6 +145,12 @@ Info tip will help you to understand the process. Select the desired destination
 
 <p align="center">
 <img width="80%" src="https://github.com/user-attachments/assets/ac10e0d3-3595-4a7e-a375-822e8ec0d65c" />
+</p>
+
+or if you are managing one project or dataset, it is possible to open the **Organize** menu from the context menu
+
+<p align="center">
+<img width="80%" src="https://github.com/user-attachments/assets/87ced130-3916-486c-a3a6-9ecf656294cd" />
 </p>
 
 **2.** A new button will appear in the header: `With N selected`.
@@ -171,7 +185,7 @@ Once job `#2` is `completed` and these items are no longer associated with any o
 <img width="80%" src="https://github.com/user-attachments/assets/86f6a67b-119b-45b7-a562-f0df4c6b697b" />
 </p>
 
-As a result, we will obtain annotated items with approved annotations. 40 items in the result indicate that, out of 13 accepted items from job `#2`, 10 were unique, while 3 were also among the accepted items in job `#1`.
+As a result, we will obtain 40 annotated items. This is because out of the 13 accepted items from job `#2`, 10 were unique, and 3 were already accepted in job `#1`.
 
 <p align="center">
 <img width="80%" src="https://github.com/user-attachments/assets/b36ae58f-a09a-4051-9e39-a5ad7aa88e00" />
