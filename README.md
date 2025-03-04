@@ -55,7 +55,7 @@ Data Commander as a Service offers two main functionalities:
 
 -   Familiar Supervisely interface.
 -   Copies items and their annotations from one location to another while maintaining structure.
--   Copying can be initiated from: projects, datasets, labeling jobs*, and queues*.
+-   Copying can be initiated from: projects, datasets, labeling jobs\*, and queues\*.
 -   Copies only items that meet the following conditions:
     -   Were annotated within a Labeling Job, and these jobs are marked **as completed**.
     -   Were marked **as accepted** during review.
