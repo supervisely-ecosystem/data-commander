@@ -11,10 +11,12 @@ import supervisely as sly
 from tqdm import tqdm
 from supervisely.api.labeling_job_api import LabelingJobInfo
 from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
-
-
+from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
+import tempfile
+from supervisely.volume import stl_converter
+from supervisely.project.volume_project import _create_volume_header
 import api_utils as api_utils
-
+from uuid import UUID
 
 load_dotenv("local.env")
 load_dotenv(os.path.expanduser("~/supervisely.env"))
@@ -619,16 +621,39 @@ def clone_volumes_with_annotations(
             api.volume.annotation.download_bulk, src_dataset_id, [info.id for info in src]
         )
         tasks = []
+        mask3d_tmp_dir = tempfile.mkdtemp()
+        mask_ids = []
+        mask_paths = []
+        key_id_map = sly.KeyIdMap()
+        set_csm_warning = False
         for ann_json, dst_info in zip(ann_jsons, dst):
-            key_id_map = sly.KeyIdMap()
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
+            for sf in ann.spatial_figures:
+                figure_id = key_id_map.get_figure_id(sf.key())
+                if sf.geometry.name() == sly.Mask3D.name():
+                    mask_ids.append(figure_id)
+                    mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
+                if sf.geometry.name() == ClosedSurfaceMesh.name():
+                    set_csm_warning = True
+            run_in_executor(
+                api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
             tasks.append(
                 executor.submit(
                     api.volume.annotation.append, dst_info.id, ann, key_id_map, volume_info=dst_info
                 )
             )
+        
         for task in as_completed(tasks):
             task.result()
+        progress_masks = tqdm(total=len(mask_paths), desc="Uploading Mask 3D geometries")
+        for file in mask_paths:
+            with open(file, 'rb') as f:
+                key = UUID(os.path.basename(f.name))
+                api.volume.figure.upload_sf_geometries([key] , {key:f.read()}, key_id_map)
+            progress_masks.update(1)
+        progress_masks.close()
+        if set_csm_warning:
+            logger.warning("Closed Surface Meshes are no longer supported. Skipped copying.")
         return src, dst
 
     def _maybe_copy_anns_and_replace(src, dst):
