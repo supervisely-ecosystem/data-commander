@@ -1821,9 +1821,9 @@ def move_items_to_dataset(
         options=options,
         progress_cb=progress_cb,
         src_infos=item_infos,
-    )
-    if cancel_deletion:
-        logger.info("The source items will not be removed because some of its entities cannot be moved.", extra={"dataset_id": dst_dataset_id})
+    )    
+    if cancel_deletion or len(created_item_infos) < len(item_infos):
+        logger.info("Some items were not moved. Skipping deletion of source items", extra={"dataset_id": dst_dataset_id})
     else:
         delete_items(item_infos)
     cancel_deletion = False
