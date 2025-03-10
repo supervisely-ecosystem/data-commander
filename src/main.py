@@ -29,6 +29,7 @@ api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 merged_meta = None
 TASK_ID = None
+cancel_deletion = False # flag to cancel deletion of the source items
 
 if sly.is_development():
     api.app.workflow.enable()
@@ -635,6 +636,7 @@ def clone_volumes_with_annotations(
                     mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
                 if sf.geometry.name() == ClosedSurfaceMesh.name():
                     set_csm_warning = True
+                    cancel_deletion = True
             run_in_executor(
                 api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
             tasks.append(
@@ -654,6 +656,7 @@ def clone_volumes_with_annotations(
         progress_masks.close()
         if set_csm_warning:
             logger.warning("Closed Surface Meshes are no longer supported. Skipped copying.")
+        set_csm_warning = False
         return src, dst
 
     def _maybe_copy_anns_and_replace(src, dst):
@@ -1651,8 +1654,13 @@ def move_project(
             "No datasets created. Skipping deletion", extra={"project_id": src_project_info.id}
         )
         return []
-    logger.info("Removing source project", extra={"project_id": src_project_info.id})
-    run_in_executor(api.project.remove, src_project_info.id)
+    
+    if cancel_deletion:
+        logger.info("The source project will not be removed because some of its entities cannot be moved.", extra={"project_id": src_project_info.id})
+    else:
+        logger.info("Removing source project", extra={"project_id": src_project_info.id})
+        run_in_executor(api.project.remove, src_project_info.id)
+    cancel_deletion = False
     return created_datasets
 
 
@@ -1724,11 +1732,16 @@ def move_datasets_tree(
     if len(datasets_to_remove) == 0:
         logger.info("No datasets to remove", extra={"dataset_id": dst_dataset_id})
         return creted_datasets
-    logger.info(
-        "Removing source datasets",
-        extra={"dataset_ids": [ds.id for ds in datasets_to_remove]},
-    )
-    run_in_executor(api.dataset.remove_batch, [ds.id for ds in datasets_to_remove])
+    
+    if cancel_deletion:
+        logger.info("The source datasets will not be removed because some of its entities cannot be moved.", extra={"dataset_id": dst_dataset_id})
+    else:
+        logger.info(
+            "Removing source datasets",
+            extra={"dataset_ids": [ds.id for ds in datasets_to_remove]},
+        )
+        run_in_executor(api.dataset.remove_batch, [ds.id for ds in datasets_to_remove])
+    cancel_deletion = False
     return creted_datasets
 
 
@@ -1798,7 +1811,11 @@ def move_items_to_dataset(
         progress_cb=progress_cb,
         src_infos=item_infos,
     )
-    delete_items(item_infos)
+    if cancel_deletion:
+        logger.info("The source items will not be removed because some of its entities cannot be moved.", extra={"dataset_id": dst_dataset_id})
+    else:
+        delete_items(item_infos)
+    cancel_deletion = False
     return created_item_infos
 
 
