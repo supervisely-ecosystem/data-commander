@@ -11,10 +11,12 @@ import supervisely as sly
 from tqdm import tqdm
 from supervisely.api.labeling_job_api import LabelingJobInfo
 from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
-
-
+from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
+import tempfile
+from supervisely.volume import stl_converter
+from supervisely.project.volume_project import _create_volume_header
 import api_utils as api_utils
-
+from uuid import UUID
 
 load_dotenv("local.env")
 load_dotenv(os.path.expanduser("~/supervisely.env"))
@@ -27,6 +29,7 @@ api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 merged_meta = None
 TASK_ID = None
+cancel_deletion = False # flag to cancel deletion of the source items
 
 if sly.is_development():
     api.app.workflow.enable()
@@ -615,20 +618,51 @@ def clone_volumes_with_annotations(
     def _copy_anns(
         src: List[sly.api.volume_api.VolumeInfo], dst: List[sly.api.volume_api.VolumeInfo]
     ):
+        global cancel_deletion
         ann_jsons = run_in_executor(
             api.volume.annotation.download_bulk, src_dataset_id, [info.id for info in src]
         )
         tasks = []
+        mask3d_tmp_dir = tempfile.mkdtemp()
+        mask_ids = []
+        mask_paths = []
+        key_id_map = sly.KeyIdMap()
+        set_csm_warning = False
         for ann_json, dst_info in zip(ann_jsons, dst):
-            key_id_map = sly.KeyIdMap()
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
+            sf_idx_to_remove = []
+            for idx, sf in enumerate(ann.spatial_figures):
+                figure_id = key_id_map.get_figure_id(sf.key())
+                if sf.geometry.name() == sly.Mask3D.name():
+                    mask_ids.append(figure_id)
+                    mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
+                if sf.geometry.name() == ClosedSurfaceMesh.name():
+                    sf_idx_to_remove.append(idx)
+                    set_csm_warning = True
+                    cancel_deletion = True
+            sf_idx_to_remove.reverse()
+            for idx in sf_idx_to_remove:
+                ann.spatial_figures.pop(idx)
+            run_in_executor(
+                api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
             tasks.append(
                 executor.submit(
                     api.volume.annotation.append, dst_info.id, ann, key_id_map, volume_info=dst_info
                 )
             )
+        
         for task in as_completed(tasks):
             task.result()
+        progress_masks = tqdm(total=len(mask_paths), desc="Uploading Mask 3D geometries")
+        for file in mask_paths:
+            with open(file, 'rb') as f:
+                key = UUID(os.path.basename(f.name))
+                api.volume.figure.upload_sf_geometries([key] , {key:f.read()}, key_id_map)
+            progress_masks.update(1)
+        progress_masks.close()
+        if set_csm_warning:
+            logger.warning("Closed Surface Meshes are no longer supported. Skipped copying.")
+        set_csm_warning = False
         return src, dst
 
     def _maybe_copy_anns_and_replace(src, dst):
@@ -1596,6 +1630,7 @@ def move_project(
     progress_cb=None,
     existing_projects=None,
 ) -> List[CreatedDataset]:
+    global cancel_deletion
     if dst_project_id is None and src_project_info.workspace_id == dst_workspace_id:
         logger.warning(
             "Moving project to the same workspace. Skipping",
@@ -1626,8 +1661,13 @@ def move_project(
             "No datasets created. Skipping deletion", extra={"project_id": src_project_info.id}
         )
         return []
-    logger.info("Removing source project", extra={"project_id": src_project_info.id})
-    run_in_executor(api.project.remove, src_project_info.id)
+    
+    if cancel_deletion:
+        logger.info("The source project will not be removed because some of its entities cannot be moved.", extra={"project_id": src_project_info.id})
+    else:
+        logger.info("Removing source project", extra={"project_id": src_project_info.id})
+        run_in_executor(api.project.remove, src_project_info.id)
+    cancel_deletion = False
     return created_datasets
 
 
@@ -1672,6 +1712,8 @@ def move_datasets_tree(
     options: Dict,
     progress_cb=None,
 ):
+    global cancel_deletion
+
     creted_datasets = copy_dataset_tree(
         datasets_tree,
         project_type,
@@ -1699,11 +1741,16 @@ def move_datasets_tree(
     if len(datasets_to_remove) == 0:
         logger.info("No datasets to remove", extra={"dataset_id": dst_dataset_id})
         return creted_datasets
-    logger.info(
-        "Removing source datasets",
-        extra={"dataset_ids": [ds.id for ds in datasets_to_remove]},
-    )
-    run_in_executor(api.dataset.remove_batch, [ds.id for ds in datasets_to_remove])
+    
+    if cancel_deletion:
+        logger.info("The source datasets will not be removed because some of its entities cannot be moved.", extra={"dataset_id": dst_dataset_id})
+    else:
+        logger.info(
+            "Removing source datasets",
+            extra={"dataset_ids": [ds.id for ds in datasets_to_remove]},
+        )
+        run_in_executor(api.dataset.remove_batch, [ds.id for ds in datasets_to_remove])
+    cancel_deletion = False
     return creted_datasets
 
 
@@ -1762,6 +1809,8 @@ def move_items_to_dataset(
     options: Dict,
     progress_cb=None,
 ):
+    global cancel_deletion
+
     item_ids = [item[JSONKEYS.ID] for item in items]
     item_infos = get_item_infos(src_dataset_id, item_ids, project_type)
     created_item_infos = clone_items(
@@ -1772,8 +1821,12 @@ def move_items_to_dataset(
         options=options,
         progress_cb=progress_cb,
         src_infos=item_infos,
-    )
-    delete_items(item_infos)
+    )    
+    if cancel_deletion or len(created_item_infos) < len(item_infos):
+        logger.info("Some items were not moved. Skipping deletion of source items", extra={"dataset_id": dst_dataset_id})
+    else:
+        delete_items(item_infos)
+    cancel_deletion = False
     return created_item_infos
 
 
