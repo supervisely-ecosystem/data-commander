@@ -618,6 +618,7 @@ def clone_volumes_with_annotations(
     def _copy_anns(
         src: List[sly.api.volume_api.VolumeInfo], dst: List[sly.api.volume_api.VolumeInfo]
     ):
+        global cancel_deletion
         ann_jsons = run_in_executor(
             api.volume.annotation.download_bulk, src_dataset_id, [info.id for info in src]
         )
@@ -629,14 +630,19 @@ def clone_volumes_with_annotations(
         set_csm_warning = False
         for ann_json, dst_info in zip(ann_jsons, dst):
             ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
-            for sf in ann.spatial_figures:
+            sf_idx_to_remove = []
+            for idx, sf in enumerate(ann.spatial_figures):
                 figure_id = key_id_map.get_figure_id(sf.key())
                 if sf.geometry.name() == sly.Mask3D.name():
                     mask_ids.append(figure_id)
                     mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
                 if sf.geometry.name() == ClosedSurfaceMesh.name():
+                    sf_idx_to_remove.append(idx)
                     set_csm_warning = True
                     cancel_deletion = True
+            sf_idx_to_remove.reverse()
+            for idx in sf_idx_to_remove:
+                ann.spatial_figures.pop(idx)
             run_in_executor(
                 api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
             tasks.append(
@@ -1624,6 +1630,7 @@ def move_project(
     progress_cb=None,
     existing_projects=None,
 ) -> List[CreatedDataset]:
+    global cancel_deletion
     if dst_project_id is None and src_project_info.workspace_id == dst_workspace_id:
         logger.warning(
             "Moving project to the same workspace. Skipping",
@@ -1705,6 +1712,8 @@ def move_datasets_tree(
     options: Dict,
     progress_cb=None,
 ):
+    global cancel_deletion
+
     creted_datasets = copy_dataset_tree(
         datasets_tree,
         project_type,
@@ -1800,6 +1809,8 @@ def move_items_to_dataset(
     options: Dict,
     progress_cb=None,
 ):
+    global cancel_deletion
+
     item_ids = [item[JSONKEYS.ID] for item in items]
     item_infos = get_item_infos(src_dataset_id, item_ids, project_type)
     created_item_infos = clone_items(
