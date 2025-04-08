@@ -2553,9 +2553,13 @@ def transfer_labeled_items(state: Dict):
 
     if len(dataset_items) > 0:
         project_datasets_map = defaultdict(list)
-        dataset_infos = [api.dataset.get_info_by_id(item[JSONKEYS.ID]) for item in dataset_items]
-        for ds in dataset_infos:
-            project_datasets_map[ds.project_id].append(ds)
+        for item in dataset_items:
+            ds_info = api.dataset.get_info_by_id(item[JSONKEYS.ID])
+            if ds_info is None:
+                sly.logger.warning(f"Dataset ID: {item[JSONKEYS.ID]} not found")
+                continue
+            project_datasets_map[ds_info.project_id].append(ds_info)
+
         for src_project_id, datasets in project_datasets_map.items():
             dst_project_info = None
             for dataset in datasets:
