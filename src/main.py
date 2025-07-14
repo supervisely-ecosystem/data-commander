@@ -1053,6 +1053,8 @@ def create_dataset_recursively(
             created_dataset = CreatedDataset(
                 dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
             )
+            if dataset_info.custom_data:
+                run_in_executor(api.dataset.update, created_id, custom_data=dataset_info.custom_data)
             logger.info(
                 "Created Dataset",
                 extra={
@@ -1323,7 +1325,7 @@ def replace_dataset(src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.Dat
     """Remove src_dataset_info and change name of dst_dataset_info to src_dataset_info.name"""
     api.dataset.update(src_dataset_info.id, name=src_dataset_info.name + "__to_remove")
     api.dataset.remove(src_dataset_info.id)
-    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name)
+    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name, custom_data=src_dataset_info.custom_data)
 
 
 def run_in_executor(func, *args, **kwargs):
@@ -2260,7 +2262,7 @@ def transfer_from_dataset(
                 f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
             if src_dataset.custom_data:
-                api.dataset.update(target_dataset.id, custom_data=src_dataset.custom_data)
+                run_in_executor(api.dataset.update, target_dataset.id, custom_data=src_dataset.custom_data)
                 logger.info(f"Dataset custom data has been updated")
         else:
             raise NotImplementedError(
