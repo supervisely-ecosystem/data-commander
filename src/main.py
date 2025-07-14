@@ -18,8 +18,10 @@ from supervisely.project.volume_project import _create_volume_header
 import api_utils as api_utils
 from uuid import UUID
 
-load_dotenv("local.env")
-load_dotenv(os.path.expanduser("~/supervisely.env"))
+
+if sly.is_development():
+    load_dotenv("local.env")
+    load_dotenv(os.path.expanduser("~/supervisely.env"))
 
 
 DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -1004,6 +1006,9 @@ def create_dataset_recursively(
         created_id = None
         created_dataset = None
         if dataset_info is not None:
+            # dataset_info from tree doesn't include custom_data
+            # so we need to get it from API using different method
+            dataset_info = run_in_executor(api.dataset.get_info_by_id, dataset_info.id)
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
                 existing = run_in_executor(
                     api.dataset.get_list, dst_project_id, parent_id=dst_parent_id
@@ -1022,6 +1027,7 @@ def create_dataset_recursively(
                 created_at=dataset_info.created_at if perserve_date else None,
                 updated_at=dataset_info.updated_at if perserve_date else None,
                 created_by=dataset_info.created_by if perserve_date else None,
+                custom_data=dataset_info.custom_data,
             )
 
             created_id = created_info.id
@@ -1050,6 +1056,8 @@ def create_dataset_recursively(
             created_dataset = CreatedDataset(
                 dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
             )
+            if dataset_info.custom_data:
+                run_in_executor(api.dataset.update, created_id, custom_data=dataset_info.custom_data)
             logger.info(
                 "Created Dataset",
                 extra={
@@ -1320,7 +1328,7 @@ def replace_dataset(src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.Dat
     """Remove src_dataset_info and change name of dst_dataset_info to src_dataset_info.name"""
     api.dataset.update(src_dataset_info.id, name=src_dataset_info.name + "__to_remove")
     api.dataset.remove(src_dataset_info.id)
-    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name)
+    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name, custom_data=src_dataset_info.custom_data)
 
 
 def run_in_executor(func, *args, **kwargs):
@@ -1362,7 +1370,7 @@ def copy_project_with_replace(
             parent_id=dst_dataset_id,
             created_at=src_project_info.created_at if perserve_date else None,
             updated_at=src_project_info.updated_at if perserve_date else None,
-            created_by=src_project_info.created_by_id if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,     
         )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         created_datasets.append(
@@ -2256,6 +2264,9 @@ def transfer_from_dataset(
             logger.info(
                 f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
+            if src_dataset.custom_data:
+                run_in_executor(api.dataset.update, target_dataset.id, custom_data=src_dataset.custom_data)
+                logger.info(f"Dataset custom data has been updated")
         else:
             raise NotImplementedError(
                 f"Conflict resolution mode '{options.conflict_resolution_mode}' is not implemented"

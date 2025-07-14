@@ -92,6 +92,7 @@ def create_dataset(
     created_at: Optional[str] = None,
     updated_at: Optional[str] = None,
     created_by: Optional[int] = None,
+    custom_data: Optional[Dict] = None,
 ):
     effective_name = api.dataset._get_effective_new_name(
         project_id=project_id,
@@ -111,6 +112,8 @@ def create_dataset(
         data[ApiField.UPDATED_AT] = updated_at
     if created_by is not None:
         data[ApiField.CREATED_BY_ID[0][0]] = created_by
+    if custom_data is not None:
+        data[ApiField.CUSTOM_DATA] = custom_data
     try:
         response = api.post(
             "datasets.add",
