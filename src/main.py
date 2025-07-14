@@ -1053,6 +1053,10 @@ def create_dataset_recursively(
             created_dataset = CreatedDataset(
                 dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
             )
+            logger.info(f"------------------------------------------------")
+            logger.info(f"Dataset name: {dataset_info.name}")
+            logger.info(f"Dataset custom data: {dataset_info.custom_data}")
+            logger.info(f"------------------------------------------------")
             if dataset_info.custom_data:
                 run_in_executor(api.dataset.update, created_id, custom_data=dataset_info.custom_data)
             logger.info(
