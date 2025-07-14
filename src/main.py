@@ -1006,6 +1006,9 @@ def create_dataset_recursively(
         created_id = None
         created_dataset = None
         if dataset_info is not None:
+            # dataset_info from tree doesn't include custom_data
+            # so we need to get it from API using different method
+            dataset_info = run_in_executor(api.dataset.get_info_by_id, dataset_info.id)
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
                 existing = run_in_executor(
                     api.dataset.get_list, dst_project_id, parent_id=dst_parent_id
@@ -1053,13 +1056,6 @@ def create_dataset_recursively(
             created_dataset = CreatedDataset(
                 dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
             )
-            logger.info(f"------------------------------------------------")
-            logger.info(f"Dataset name: {dataset_info.name}")
-            logger.info(f"Dataset id: {dataset_info.id}")
-            logger.info(f"Dataset custom data: {dataset_info.custom_data}")
-            ds_info = api.dataset.get_info_by_id(dataset_info.id)
-            logger.info(f"GET INFO BY ID Dataset custom data: {ds_info.custom_data}")
-            logger.info(f"------------------------------------------------")
             if dataset_info.custom_data:
                 run_in_executor(api.dataset.update, created_id, custom_data=dataset_info.custom_data)
             logger.info(
