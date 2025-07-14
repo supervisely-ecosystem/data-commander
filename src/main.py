@@ -18,8 +18,10 @@ from supervisely.project.volume_project import _create_volume_header
 import api_utils as api_utils
 from uuid import UUID
 
-load_dotenv("local.env")
-load_dotenv(os.path.expanduser("~/supervisely.env"))
+
+if sly.is_development():
+    load_dotenv("local.env")
+    load_dotenv(os.path.expanduser("~/supervisely.env"))
 
 
 DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -1022,6 +1024,7 @@ def create_dataset_recursively(
                 created_at=dataset_info.created_at if perserve_date else None,
                 updated_at=dataset_info.updated_at if perserve_date else None,
                 created_by=dataset_info.created_by if perserve_date else None,
+                custom_data=dataset_info.custom_data,
             )
 
             created_id = created_info.id
@@ -1362,7 +1365,7 @@ def copy_project_with_replace(
             parent_id=dst_dataset_id,
             created_at=src_project_info.created_at if perserve_date else None,
             updated_at=src_project_info.updated_at if perserve_date else None,
-            created_by=src_project_info.created_by_id if perserve_date else None,
+            created_by=src_project_info.created_by_id if perserve_date else None,     
         )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         created_datasets.append(
@@ -2256,6 +2259,9 @@ def transfer_from_dataset(
             logger.info(
                 f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
+            if src_dataset.custom_data:
+                api.dataset.update(target_dataset.id, custom_data=src_dataset.custom_data)
+                logger.info(f"Dataset custom data has been updated")
         else:
             raise NotImplementedError(
                 f"Conflict resolution mode '{options.conflict_resolution_mode}' is not implemented"
