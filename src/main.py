@@ -393,6 +393,17 @@ def clone_images_with_annotations(
         image_infos = [info for info in image_infos if info.name not in existing]
         if progress_cb is not None:
             progress_cb(len_before - len(image_infos))
+    src_existing = {info.name: info for info in image_infos}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
+        JSONKEYS.CONFLICT_SKIP,
+        JSONKEYS.CONFLICT_REPLACE,
+    ]:
+        len_before = len(image_infos)
+        image_infos = [info for info in image_infos if info.name not in src_existing]
+        if progress_cb is not None:
+            progress_cb(len_before - len(image_infos))
+        if len(image_infos) != len_before:
+            logger.info("Some images were skipped due to name conflicts within source images.")
 
     if len(image_infos) == 0:
         return []
@@ -429,6 +440,7 @@ def clone_images_with_annotations(
 
         return src, dst
 
+    reserved_names = set(existing.keys())
     to_rename = {}  # {new_name: old_name}
     upload_images_tasks = []
     for src_image_infos_batch in sly.batched(image_infos, UPLOAD_IMAGES_BATCH_SIZE):
@@ -440,12 +452,32 @@ def clone_images_with_annotations(
             JSONKEYS.CONFLICT_REPLACE,
         ]:
             for i, name in enumerate(names):
-                if name in existing:
-                    names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
-                    )
+                j = 0
+                if name in reserved_names:
+                    new_name = name
+                    while new_name in reserved_names:
+                        if j == 0:
+                            new_name = (
+                                ".".join(name.split(".")[:-1])
+                                + "_"
+                                + now
+                                + "."
+                                + name.split(".")[-1]
+                            )
+                        else:
+                            new_name = (
+                                ".".join(name.split(".")[:-1])
+                                + "_"
+                                + now
+                                + f"_{j}"
+                                + "."
+                                + name.split(".")[-1]
+                            )
+                        j += 1
+                    names[i] = new_name
                     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                         to_rename[names[i]] = name
+                    reserved_names.add(new_name)
         upload_images_tasks.append(
             executor.submit(
                 _copy_imgs,
