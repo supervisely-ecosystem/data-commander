@@ -393,13 +393,18 @@ def clone_images_with_annotations(
         image_infos = [info for info in image_infos if info.name not in existing]
         if progress_cb is not None:
             progress_cb(len_before - len(image_infos))
-    src_existing = {info.name: info for info in image_infos}
+    src_existing = set()
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
         JSONKEYS.CONFLICT_SKIP,
         JSONKEYS.CONFLICT_REPLACE,
     ]:
         len_before = len(image_infos)
-        image_infos = [info for info in image_infos if info.name not in src_existing]
+        non_duplicate = []
+        for image_info in image_infos:
+            if image_info.name not in src_existing:
+                non_duplicate.append(image_info)
+                src_existing.add(image_info.name)
+        image_infos = non_duplicate
         if progress_cb is not None:
             progress_cb(len_before - len(image_infos))
         if len(image_infos) != len_before:
