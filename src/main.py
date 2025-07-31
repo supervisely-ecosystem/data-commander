@@ -31,7 +31,7 @@ api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
 merged_meta = None
 TASK_ID = None
-cancel_deletion = False # flag to cancel deletion of the source items
+cancel_deletion = False  # flag to cancel deletion of the source items
 
 if sly.is_development():
     api.app.workflow.enable()
@@ -407,19 +407,25 @@ def clone_images_with_annotations(
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
-        try:
-            api.annotation.copy_batch_by_ids(
-                [i.id for i in src],
-                [i.id for i in dst],
-                save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
-            )
-        except Exception as e:
-            if "Some users are not members of the destination group" in str(e):
-                raise ValueError(
-                    "Unable to copy annotations. Annotation creator is not a member of the destination team."
-                ) from e
-            else:
-                raise e
+        by_dataset = defaultdict(list)
+        for src_info, dst_info in zip(src, dst):
+            by_dataset[src_info.dataset_id].append((src_info, dst_info))
+        for pairs in by_dataset.values():
+            src_ids = [info[0].id for info in pairs]
+            dst_ids = [info[1].id for info in pairs]
+            try:
+                api.annotation.copy_batch_by_ids(
+                    src_ids,
+                    dst_ids,
+                    save_source_date=options[JSONKEYS.PRESERVE_SRC_DATE],
+                )
+            except Exception as e:
+                if "Some users are not members of the destination group" in str(e):
+                    raise ValueError(
+                        "Unable to copy annotations. Annotation creator is not a member of the destination team."
+                    ) from e
+                else:
+                    raise e
 
         return src, dst
 
@@ -645,21 +651,20 @@ def clone_volumes_with_annotations(
             sf_idx_to_remove.reverse()
             for idx in sf_idx_to_remove:
                 ann.spatial_figures.pop(idx)
-            run_in_executor(
-                api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
+            run_in_executor(api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
             tasks.append(
                 executor.submit(
                     api.volume.annotation.append, dst_info.id, ann, key_id_map, volume_info=dst_info
                 )
             )
-        
+
         for task in as_completed(tasks):
             task.result()
         progress_masks = tqdm(total=len(mask_paths), desc="Uploading Mask 3D geometries")
         for file in mask_paths:
-            with open(file, 'rb') as f:
+            with open(file, "rb") as f:
                 key = UUID(os.path.basename(f.name))
-                api.volume.figure.upload_sf_geometries([key] , {key:f.read()}, key_id_map)
+                api.volume.figure.upload_sf_geometries([key], {key: f.read()}, key_id_map)
             progress_masks.update(1)
         progress_masks.close()
         if set_csm_warning:
@@ -1057,7 +1062,9 @@ def create_dataset_recursively(
                 dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
             )
             if dataset_info.custom_data:
-                run_in_executor(api.dataset.update, created_id, custom_data=dataset_info.custom_data)
+                run_in_executor(
+                    api.dataset.update, created_id, custom_data=dataset_info.custom_data
+                )
             logger.info(
                 "Created Dataset",
                 extra={
@@ -1328,7 +1335,9 @@ def replace_dataset(src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.Dat
     """Remove src_dataset_info and change name of dst_dataset_info to src_dataset_info.name"""
     api.dataset.update(src_dataset_info.id, name=src_dataset_info.name + "__to_remove")
     api.dataset.remove(src_dataset_info.id)
-    return api.dataset.update(dst_dataset_info.id, name=src_dataset_info.name, custom_data=src_dataset_info.custom_data)
+    return api.dataset.update(
+        dst_dataset_info.id, name=src_dataset_info.name, custom_data=src_dataset_info.custom_data
+    )
 
 
 def run_in_executor(func, *args, **kwargs):
@@ -1370,7 +1379,7 @@ def copy_project_with_replace(
             parent_id=dst_dataset_id,
             created_at=src_project_info.created_at if perserve_date else None,
             updated_at=src_project_info.updated_at if perserve_date else None,
-            created_by=src_project_info.created_by_id if perserve_date else None,     
+            created_by=src_project_info.created_by_id if perserve_date else None,
         )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
         created_datasets.append(
@@ -1669,9 +1678,12 @@ def move_project(
             "No datasets created. Skipping deletion", extra={"project_id": src_project_info.id}
         )
         return []
-    
+
     if cancel_deletion:
-        logger.info("The source project will not be removed because some of its entities cannot be moved.", extra={"project_id": src_project_info.id})
+        logger.info(
+            "The source project will not be removed because some of its entities cannot be moved.",
+            extra={"project_id": src_project_info.id},
+        )
     else:
         logger.info("Removing source project", extra={"project_id": src_project_info.id})
         run_in_executor(api.project.remove, src_project_info.id)
@@ -1749,9 +1761,12 @@ def move_datasets_tree(
     if len(datasets_to_remove) == 0:
         logger.info("No datasets to remove", extra={"dataset_id": dst_dataset_id})
         return creted_datasets
-    
+
     if cancel_deletion:
-        logger.info("The source datasets will not be removed because some of its entities cannot be moved.", extra={"dataset_id": dst_dataset_id})
+        logger.info(
+            "The source datasets will not be removed because some of its entities cannot be moved.",
+            extra={"dataset_id": dst_dataset_id},
+        )
     else:
         logger.info(
             "Removing source datasets",
@@ -1829,9 +1844,12 @@ def move_items_to_dataset(
         options=options,
         progress_cb=progress_cb,
         src_infos=item_infos,
-    )    
+    )
     if cancel_deletion or len(created_item_infos) < len(item_infos):
-        logger.info("Some items were not moved. Skipping deletion of source items", extra={"dataset_id": dst_dataset_id})
+        logger.info(
+            "Some items were not moved. Skipping deletion of source items",
+            extra={"dataset_id": dst_dataset_id},
+        )
     else:
         delete_items(item_infos)
     cancel_deletion = False
@@ -2265,7 +2283,9 @@ def transfer_from_dataset(
                 f"Dataset created with ID: {target_dataset.id} and name '{target_dataset.name}'"
             )
             if src_dataset.custom_data:
-                run_in_executor(api.dataset.update, target_dataset.id, custom_data=src_dataset.custom_data)
+                run_in_executor(
+                    api.dataset.update, target_dataset.id, custom_data=src_dataset.custom_data
+                )
                 logger.info(f"Dataset custom data has been updated")
         else:
             raise NotImplementedError(
