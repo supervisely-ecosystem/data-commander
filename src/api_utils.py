@@ -73,12 +73,14 @@ def images_get_list(api: sly.Api, dataset_id, image_ids=None):
         ApiField.PATH_ORIGINAL,
         ApiField.CREATED_BY_ID[0][0],
     ]
-    filters = None
-    if image_ids is not None:
-        filters = [{"field": ApiField.ID, "operator": "in", "value": image_ids}]
-    img_infos = api.image.get_list(
-        dataset_id, filters=filters, fields=api_fields, force_metadata_for_links=False
-    )
+    if image_ids is None:
+        img_infos = api.image.get_list(
+            dataset_id, fields=api_fields, force_metadata_for_links=False
+        )
+    else:
+        img_infos = api.image.get_info_by_id_batch(
+            ids=image_ids, fields=api_fields, force_metadata_for_links=False
+        )
     return img_infos
 
 
@@ -92,7 +94,6 @@ def create_dataset(
     created_at: Optional[str] = None,
     updated_at: Optional[str] = None,
     created_by: Optional[int] = None,
-    custom_data: Optional[Dict] = None,
 ):
     effective_name = api.dataset._get_effective_new_name(
         project_id=project_id,
@@ -112,8 +113,6 @@ def create_dataset(
         data[ApiField.UPDATED_AT] = updated_at
     if created_by is not None:
         data[ApiField.CREATED_BY_ID[0][0]] = created_by
-    if custom_data is not None:
-        data[ApiField.CUSTOM_DATA] = custom_data
     try:
         response = api.post(
             "datasets.add",
