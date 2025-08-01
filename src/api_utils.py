@@ -1,5 +1,4 @@
-from ast import Dict
-from typing import List, Optional
+from typing import Dict, List, Optional
 import pandas as pd
 import supervisely as sly
 from supervisely.api.api import ApiField
@@ -89,6 +88,7 @@ def create_dataset(
     project_id: int,
     name: str,
     description: Optional[str] = "",
+    custom_data: Dict = None,
     change_name_if_conflict: Optional[bool] = False,
     parent_id: Optional[int] = None,
     created_at: Optional[str] = None,
@@ -107,6 +107,8 @@ def create_dataset(
         ApiField.DESCRIPTION: description,
         ApiField.PARENT_ID: parent_id,
     }
+    if custom_data is not None:
+        data[ApiField.CUSTOM_DATA] = custom_data
     if created_at is not None:
         data[ApiField.CREATED_AT] = created_at
     if updated_at is not None:

@@ -1064,12 +1064,12 @@ def create_dataset_recursively(
                 dst_project_id,
                 dataset_info.name,
                 dataset_info.description,
+                custom_data=dataset_info.custom_data,
                 change_name_if_conflict=True,
                 parent_id=dst_parent_id,
                 created_at=dataset_info.created_at if perserve_date else None,
                 updated_at=dataset_info.updated_at if perserve_date else None,
                 created_by=dataset_info.created_by if perserve_date else None,
-                custom_data=dataset_info.custom_data,
             )
 
             created_id = created_info.id
