@@ -1915,7 +1915,7 @@ def copy_or_move(state: Dict, move: bool = False):
     progress = sly.Progress(message="Cloning items", total_cnt=1)
 
     def _progress_cb(n=1):
-        if n == 0:
+        if not n:
             return
         progress.iters_done_report(n)
 
