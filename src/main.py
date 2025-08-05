@@ -1929,7 +1929,8 @@ def copy_or_move(state: Dict, move: bool = False):
         project_id = item[JSONKEYS.ID]
         project_info = api.project.get_info_by_id(project_id, raise_error=True)
         src_project_infos[project_id] = project_info
-        items_to_create += project_info.items_count
+        if project_info.items_count is not None:
+            items_to_create += project_info.items_count
         # project meta is merged in the copy function
     existing_projects = None
     if (
