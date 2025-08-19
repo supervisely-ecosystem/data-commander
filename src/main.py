@@ -1390,7 +1390,11 @@ def copy_project_with_replace(
     progress_cb=None,
     existing_projects=None,
     datasets_tree=None,
+    merge=False
 ) -> List[CreatedDataset]:
+    if merge:
+        if dst_project_id is None:
+            raise ValueError("cannot merge with workspace")
     if dst_project_id is None and dst_workspace_id == src_project_info.workspace_id:
         logger.warning(
             "Copying project to the same workspace with replace. Skipping",
@@ -1406,22 +1410,27 @@ def copy_project_with_replace(
     if dst_project_id is not None:
         # copy project to existing project or existing dataset
         project_meta = merge_project_meta(src_project_info.id, dst_project_id)
-        created_dataset = run_in_executor(
-            api_utils.create_dataset,
-            api,
-            dst_project_id,
-            src_project_info.name,
-            src_project_info.description,
-            change_name_if_conflict=True,
-            parent_id=dst_dataset_id,
-            created_at=src_project_info.created_at if perserve_date else None,
-            updated_at=src_project_info.updated_at if perserve_date else None,
-            created_by=src_project_info.created_by_id if perserve_date else None,
-        )
+        if merge:
+            created_dataset = None
+            created_dataset_id = None
+        else:
+            created_dataset = run_in_executor(
+                api_utils.create_dataset,
+                api,
+                dst_project_id,
+                src_project_info.name,
+                src_project_info.description,
+                change_name_if_conflict=True,
+                parent_id=dst_dataset_id,
+                created_at=src_project_info.created_at if perserve_date else None,
+                updated_at=src_project_info.updated_at if perserve_date else None,
+                created_by=src_project_info.created_by_id if perserve_date else None,
+            )
+            created_dataset_id = created_dataset.id
+            created_datasets.append(
+                CreatedDataset(src_project_info, created_dataset, conflict_resolution_result="copied")
+            )
         existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
-        created_datasets.append(
-            CreatedDataset(src_project_info, created_dataset, conflict_resolution_result="copied")
-        )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
                 create_dataset_recursively(
@@ -1430,7 +1439,7 @@ def copy_project_with_replace(
                     dataset_info=ds,
                     children=children,
                     dst_project_id=dst_project_id,
-                    dst_dataset_id=created_dataset.id,
+                    dst_dataset_id=created_dataset_id,
                     options=options,
                     progress_cb=progress_cb,
                 )
@@ -1582,6 +1591,7 @@ def copy_project(
     progress_cb=None,
     existing_projects=None,
     datasets_tree=None,
+    merge=False,
 ) -> List[CreatedDataset]:
     if datasets_tree is None:
         datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
@@ -1595,6 +1605,7 @@ def copy_project(
             progress_cb,
             existing_projects,
             datasets_tree,
+            merge=merge
         )
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         return copy_project_with_skip(
@@ -2029,6 +2040,58 @@ def copy_or_move(state: Dict, move: bool = False):
                 options,
                 _progress_cb,
             )
+
+
+def merge_projects_or_datasets(state: Dict):
+    source = state[JSONKEYS.SOURCE]
+    destination = state[JSONKEYS.DESTINATION]
+    options = state[JSONKEYS.OPTIONS]
+    items = state[JSONKEYS.ITEMS]
+
+    src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
+    src_workspace_id = source.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    src_project_id = source.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    src_dataset_id = source.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+
+    dst_team_id = destination[JSONKEYS.TEAM][JSONKEYS.ID]
+    dst_workspace_id = destination.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    dst_project_id = destination.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    dst_dataset_id = destination.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+
+    if len(items) == 0:
+        logger.info("No items to merge. Skipping")
+        return
+    
+
+    item_type = items[0][JSONKEYS.TYPE]
+    if item_type not in [JSONKEYS.PROJECT, JSONKEYS.DATASET]:
+        raise ValueError(
+            f"Items must be of type '{JSONKEYS.PROJECT}' or '{JSONKEYS.DATASET}', but got {items[0][JSONKEYS.TYPE]}"
+        )
+    for item in items:
+        if item[JSONKEYS.TYPE] != item_type:
+            raise ValueError(
+                f"All items must be of the same type, but got {item_type} and {item[JSONKEYS.TYPE]}"
+            )
+    if item_type == JSONKEYS.PROJECT:
+        if dst_project_id is None:
+            raise ValueError("Destination project ID is required for merging projects")
+    if item_type == JSONKEYS.DATASET:
+        if dst_dataset_id is None:
+            raise ValueError("Destination dataset ID is required for merging datasets")
+    
+
+    progress = sly.Progress(message="Merging items", total_cnt=1)
+
+    def _progress_cb(n=1):
+        if not n:
+            return
+        progress.iters_done_report(n)
+
+    
+    if item_type == JSONKEYS.PROJECT:
+        copy_dataset_tree()
+    
 
 
 # ------------------------------------ Transfer Annotated Items ----------------------------------- #
@@ -2662,6 +2725,8 @@ def main():
         copy_or_move(state)
     elif action == "transfer_labeled_items":
         transfer_labeled_items(state)
+    elif action == "merge":
+        merge_projects_or_datasets(state)
     else:
         raise ValueError(f"Unsupported action: {action}")
 
