@@ -2654,12 +2654,8 @@ def transfer_labeled_items(state: Dict):
 
 
 def main():
-    try:
-        state = extract_state_from_env()
-    except:
-        logger.info("Unable to load state from environment variables. Retrieving from task info.")
-        task_info = api.task.get_info_by_id(env.task_id())
-        state = task_info["meta"]["params"]["state"]
+    task_info = api.task.get_info_by_id(env.task_id())
+    state = task_info["meta"]["params"]["state"]
     logger.info("State:", extra=state)
     action = state[JSONKEYS.ACTION]
     if action == "move":
