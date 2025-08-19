@@ -17,6 +17,7 @@ from supervisely.volume import stl_converter
 from supervisely.project.volume_project import _create_volume_header
 import api_utils as api_utils
 from uuid import UUID
+from supervisely.io import env
 
 
 if sly.is_development():
@@ -2653,7 +2654,12 @@ def transfer_labeled_items(state: Dict):
 
 
 def main():
-    state = extract_state_from_env()
+    try:
+        state = extract_state_from_env()
+    except:
+        logger.info("Unable to load state from environment variables. Retrieving from task info.")
+        task_info = api.task.get_info_by_id(env.task_id())
+        state = task_info["meta"]["params"]["state"]
     logger.info("State:", extra=state)
     action = state[JSONKEYS.ACTION]
     if action == "move":
