@@ -5,8 +5,8 @@
   "type": "app",
   "headless": true,
   "main_script": "src/main.py",
-  "docker_image": "supervisely/base-py-sdk:6.73.403",
-  "instance_version": "6.14.0",
+  "docker_image": "supervisely/base-py-sdk:6.73.425",
+  "instance_version": "6.14.4",
   "system": true,
   "icon": "https://github.com/user-attachments/assets/673c34ac-2f58-4d1c-8679-439e85a25a45",
   "poster": "https://github.com/user-attachments/assets/09252852-3f49-4bad-b665-14e52458e4c0"
