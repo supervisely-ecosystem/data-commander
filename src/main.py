@@ -368,13 +368,17 @@ def maybe_replace(src: List, dst: List, to_rename: Dict, existing: Dict):
         if dst_image_info.name in to_rename:
             new_name = to_rename[dst_image_info.name]
             to_remove_info = existing[new_name]
-            rename_tasks.append(executor.submit(rename, dst_image_info, new_name, to_remove_info))
+            rename_tasks.append(
+                executor.submit(rename, dst_image_info, new_name, to_remove_info)
+            )
     to_remove = []
     for task in as_completed(rename_tasks):
         _, to_remove_info = task.result()
         to_remove.append(to_remove_info)
     run_in_executor(
-        api.image.remove_batch, [info.id for info in to_remove], batch_size=len(to_remove)
+        api.image.remove_batch,
+        [info.id for info in to_remove],
+        batch_size=len(to_remove),
     )
     return src, dst
 
@@ -408,7 +412,9 @@ def clone_images_with_annotations(
         if progress_cb is not None:
             progress_cb(len_before - len(image_infos))
         if len(image_infos) != len_before:
-            logger.info("Some images were skipped due to name conflicts within source images.")
+            logger.info(
+                "Some images were skipped due to name conflicts within source images."
+            )
 
     if len(image_infos) == 0:
         return []
@@ -418,7 +424,11 @@ def clone_images_with_annotations(
         infos,
     ):
         uploaded = api_utils.images_bulk_add(
-            api, dst_dataset_id, names, infos, perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE]
+            api,
+            dst_dataset_id,
+            names,
+            infos,
+            perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE],
         )
         return infos, uploaded
 
@@ -480,7 +490,10 @@ def clone_images_with_annotations(
                             )
                         j += 1
                     names[i] = new_name
-                    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    if (
+                        options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                        == JSONKEYS.CONFLICT_REPLACE
+                    ):
                         to_rename[names[i]] = name
                     reserved_names.add(new_name)
         upload_images_tasks.append(
@@ -503,16 +516,24 @@ def clone_images_with_annotations(
             for src_batch, dst_batch in zip(
                 sly.batched(src_image_infos), sly.batched(uploaded_images_infos)
             ):
-                upload_anns_tasks.append(executor.submit(_copy_anns, src_batch, dst_batch))
+                upload_anns_tasks.append(
+                    executor.submit(_copy_anns, src_batch, dst_batch)
+                )
             for task in as_completed(upload_anns_tasks):
                 src_batch, dst_batch = task.result()
                 replace_tasks.append(
-                    local_executor.submit(maybe_replace, src_batch, dst_batch, to_rename, existing)
+                    local_executor.submit(
+                        maybe_replace, src_batch, dst_batch, to_rename, existing
+                    )
                 )
         else:
             replace_tasks.append(
                 local_executor.submit(
-                    maybe_replace, src_image_infos, uploaded_images_infos, to_rename, existing
+                    maybe_replace,
+                    src_image_infos,
+                    uploaded_images_infos,
+                    to_rename,
+                    existing,
                 )
             )
 
@@ -560,16 +581,22 @@ def clone_videos_with_annotations(
         )
         return infos, uploaded
 
-    def _copy_anns(src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]):
+    def _copy_anns(
+        src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]
+    ):
         anns_jsons = run_in_executor(
-            api.video.annotation.download_bulk, src_dataset_id, [info.id for info in src]
+            api.video.annotation.download_bulk,
+            src_dataset_id,
+            [info.id for info in src],
         )
         dst_ids = [info.id for info in dst]
         tasks = []
         for ann_json, dst_id in zip(anns_jsons, dst_ids):
             key_id_map = sly.KeyIdMap()
             ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
-            tasks.append(executor.submit(api.video.annotation.append, dst_id, ann, key_id_map))
+            tasks.append(
+                executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
+            )
         for task in as_completed(tasks):
             task.result()
         return src, dst
@@ -595,9 +622,16 @@ def clone_videos_with_annotations(
             for i, name in enumerate(names):
                 if name in existing:
                     names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
                     )
-                    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    if (
+                        options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                        == JSONKEYS.CONFLICT_REPLACE
+                    ):
                         to_rename[names[i]] = name
 
         upload_videos_tasks.append(
@@ -661,11 +695,14 @@ def clone_volumes_with_annotations(
         return infos, uploaded
 
     def _copy_anns(
-        src: List[sly.api.volume_api.VolumeInfo], dst: List[sly.api.volume_api.VolumeInfo]
+        src: List[sly.api.volume_api.VolumeInfo],
+        dst: List[sly.api.volume_api.VolumeInfo],
     ):
         global cancel_deletion
         ann_jsons = run_in_executor(
-            api.volume.annotation.download_bulk, src_dataset_id, [info.id for info in src]
+            api.volume.annotation.download_bulk,
+            src_dataset_id,
+            [info.id for info in src],
         )
         tasks = []
         mask3d_tmp_dir = tempfile.mkdtemp()
@@ -688,24 +725,36 @@ def clone_volumes_with_annotations(
             sf_idx_to_remove.reverse()
             for idx in sf_idx_to_remove:
                 ann.spatial_figures.pop(idx)
-            run_in_executor(api.volume.figure.download_sf_geometries, mask_ids, mask_paths)
+            run_in_executor(
+                api.volume.figure.download_sf_geometries, mask_ids, mask_paths
+            )
             tasks.append(
                 executor.submit(
-                    api.volume.annotation.append, dst_info.id, ann, key_id_map, volume_info=dst_info
+                    api.volume.annotation.append,
+                    dst_info.id,
+                    ann,
+                    key_id_map,
+                    volume_info=dst_info,
                 )
             )
 
         for task in as_completed(tasks):
             task.result()
-        progress_masks = tqdm(total=len(mask_paths), desc="Uploading Mask 3D geometries")
+        progress_masks = tqdm(
+            total=len(mask_paths), desc="Uploading Mask 3D geometries"
+        )
         for file in mask_paths:
             with open(file, "rb") as f:
                 key = UUID(os.path.basename(f.name))
-                api.volume.figure.upload_sf_geometries([key], {key: f.read()}, key_id_map)
+                api.volume.figure.upload_sf_geometries(
+                    [key], {key: f.read()}, key_id_map
+                )
             progress_masks.update(1)
         progress_masks.close()
         if set_csm_warning:
-            logger.warning("Closed Surface Meshes are no longer supported. Skipped copying.")
+            logger.warning(
+                "Closed Surface Meshes are no longer supported. Skipped copying."
+            )
         set_csm_warning = False
         return src, dst
 
@@ -730,9 +779,16 @@ def clone_volumes_with_annotations(
             for i, name in enumerate(names):
                 if name in existing:
                     names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
                     )
-                    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    if (
+                        options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                        == JSONKEYS.CONFLICT_REPLACE
+                    ):
                         to_rename[names[i]] = name
 
         upload_volumes_tasks.append(
@@ -776,7 +832,9 @@ def clone_pointclouds_with_annotations(
     existing = api.pointcloud.get_list(dst_dataset_id)
     existing = {info.name: info for info in existing}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
-        pointcloud_infos = [info for info in pointcloud_infos if info.name not in existing]
+        pointcloud_infos = [
+            info for info in pointcloud_infos if info.name not in existing
+        ]
 
     if len(pointcloud_infos) == 0:
         return []
@@ -800,7 +858,11 @@ def clone_pointclouds_with_annotations(
         for ann_json, dst_id in zip(ann_jsons, dst_ids):
             key_id_map = sly.KeyIdMap()
             ann = sly.PointcloudAnnotation.from_json(ann_json, project_meta, key_id_map)
-            tasks.append(executor.submit(api.pointcloud.annotation.append, dst_id, ann, key_id_map))
+            tasks.append(
+                executor.submit(
+                    api.pointcloud.annotation.append, dst_id, ann, key_id_map
+                )
+            )
         for task in as_completed(tasks):
             task.result()
         return src, dst
@@ -825,9 +887,16 @@ def clone_pointclouds_with_annotations(
             for i, name in enumerate(names):
                 if name in existing:
                     names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
                     )
-                    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                    if (
+                        options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                        == JSONKEYS.CONFLICT_REPLACE
+                    ):
                         to_rename[names[i]] = name
 
         copy_pointcloud_tasks.append(
@@ -847,7 +916,9 @@ def clone_pointclouds_with_annotations(
         for s, d in zip(src_pcd_infos, uploaded_pcd_infos):
             src_id_to_dst_info[s.id] = d
         replace_tasks.append(
-            local_executor.submit(_maybe_copy_anns_and_replace, src_pcd_infos, uploaded_pcd_infos)
+            local_executor.submit(
+                _maybe_copy_anns_and_replace, src_pcd_infos, uploaded_pcd_infos
+            )
         )
 
     for task in as_completed(replace_tasks):
@@ -887,13 +958,27 @@ def clone_pointcloud_episodes_with_annotations(
         to_rename = {}
         for i, name in enumerate(names):
             if name in existing:
-                if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_RENAME:
+                if (
+                    options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                    == JSONKEYS.CONFLICT_RENAME
+                ):
                     names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
                     )
-                elif options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
+                elif (
+                    options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                    == JSONKEYS.CONFLICT_REPLACE
+                ):
                     names[i] = (
-                        ".".join(name.split(".")[:-1]) + "_" + now + "." + name.split(".")[-1]
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
                     )
                     to_remove.append(name)
                     to_rename[names[i]] = name
@@ -911,11 +996,16 @@ def clone_pointcloud_episodes_with_annotations(
             for dst_info in dst_infos:
                 if dst_info.name in to_rename:
                     rename_tasks.append(
-                        executor.submit(api.image.edit, dst_info.id, name=to_rename[dst_info.name])
+                        executor.submit(
+                            api.image.edit, dst_info.id, name=to_rename[dst_info.name]
+                        )
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_infos = [info if info.id == dst_info.id else dst_info for dst_info in dst_infos]
+                dst_infos = [
+                    info if info.id == dst_info.id else dst_info
+                    for dst_info in dst_infos
+                ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _upload_single(src_id, dst_info):
@@ -963,7 +1053,9 @@ def clone_pointcloud_episodes_with_annotations(
         dst_infos_dict.update(src_to_dst_dict)
         if options[JSONKEYS.CLONE_ANNOTATIONS]:
             for src_id, dst_info in src_to_dst_dict.items():
-                copy_anns_tasks.append(executor.submit(_upload_single, src_id, dst_info))
+                copy_anns_tasks.append(
+                    executor.submit(_upload_single, src_id, dst_info)
+                )
 
     for task in as_completed(copy_anns_tasks):
         task.result()
@@ -1043,7 +1135,9 @@ def create_dataset_recursively(
     perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
 
     def _create_rec(
-        dataset_info: sly.DatasetInfo, children: Dict[sly.DatasetInfo, Dict], dst_parent_id: int
+        dataset_info: sly.DatasetInfo,
+        children: Dict[sly.DatasetInfo, Dict],
+        dst_parent_id: int,
     ) -> CreatedDataset:
         created_id = None
         created_dataset = None
@@ -1056,8 +1150,13 @@ def create_dataset_recursively(
                     api.dataset.get_list, dst_project_id, parent_id=dst_parent_id
                 )
                 if any(ds.name == dataset_info.name for ds in existing):
-                    logger.info("Dataset already exists", extra={"dataset_name": dataset_info.name})
-                    return CreatedDataset(dataset_info, None, conflict_resolution_result="skipped")
+                    logger.info(
+                        "Dataset already exists",
+                        extra={"dataset_name": dataset_info.name},
+                    )
+                    return CreatedDataset(
+                        dataset_info, None, conflict_resolution_result="skipped"
+                    )
             created_info = run_in_executor(
                 api_utils.create_dataset,
                 api,
@@ -1075,7 +1174,12 @@ def create_dataset_recursively(
             created_id = created_info.id
             if should_clone_items:
                 clone_items(
-                    dataset_info.id, created_id, project_type, project_meta, options, progress_cb
+                    dataset_info.id,
+                    created_id,
+                    project_type,
+                    project_meta,
+                    options,
+                    progress_cb,
                 )
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                 if created_info.name != dataset_info.name:
@@ -1085,7 +1189,9 @@ def create_dataset_recursively(
                         name=dataset_info.name,
                         parent_id=dst_dataset_id,
                     )
-                    created_info = run_in_executor(replace_dataset, existing, created_info)
+                    created_info = run_in_executor(
+                        replace_dataset, existing, created_info
+                    )
             # to update items count
             created_info = run_in_executor(api.dataset.get_info_by_id, created_id)
             conflict_resolution_result = "copied"
@@ -1096,7 +1202,9 @@ def create_dataset_recursively(
             else:
                 conflict_resolution_result = "copied"
             created_dataset = CreatedDataset(
-                dataset_info, created_info, conflict_resolution_result=conflict_resolution_result
+                dataset_info,
+                created_info,
+                conflict_resolution_result=conflict_resolution_result,
             )
             if dataset_info.custom_data:
                 run_in_executor(
@@ -1114,7 +1222,9 @@ def create_dataset_recursively(
         if children is None:
             return created_dataset
         for child, subchildren in children.items():
-            tasks_queue.put(local_executor.submit(_create_rec, child, subchildren, created_id))
+            tasks_queue.put(
+                local_executor.submit(_create_rec, child, subchildren, created_id)
+            )
         return created_dataset
 
     def _consume():
@@ -1135,7 +1245,10 @@ def create_dataset_recursively(
 
 
 def create_project(
-    src_project_info: sly.ProjectInfo, dst_workspace_id: int, project_type: str, options: Dict
+    src_project_info: sly.ProjectInfo,
+    dst_workspace_id: int,
+    project_type: str,
+    options: Dict,
 ) -> Tuple[sly.ProjectInfo, sly.ProjectMeta]:
     created_at = None
     created_by = None
@@ -1160,7 +1273,10 @@ def create_project(
     )
     logger.info(
         "Created project",
-        extra={"project_id": dst_project_info.id, "project_name": dst_project_info.name},
+        extra={
+            "project_id": dst_project_info.id,
+            "project_name": dst_project_info.name,
+        },
     )
     return dst_project_info
 
@@ -1241,7 +1357,10 @@ def merge_project_meta(src_project_id, dst_project_id):
                         changed = True
                     elif dst_tag_meta.applicable_classes != []:
                         all_applicable_classes = list(
-                            set(dst_tag_meta.applicable_classes + tag_meta.applicable_classes)
+                            set(
+                                dst_tag_meta.applicable_classes
+                                + tag_meta.applicable_classes
+                            )
                         )
                         changes["applicable_classes"] = all_applicable_classes
                         changed = True
@@ -1254,7 +1373,9 @@ def merge_project_meta(src_project_id, dst_project_id):
                     f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
                 )
     return (
-        api.project.update_meta(dst_project_id, dst_project_meta) if changed else dst_project_meta
+        api.project.update_meta(dst_project_id, dst_project_meta)
+        if changed
+        else dst_project_meta
     )
 
 
@@ -1344,7 +1465,10 @@ def tree_from_list(datasets: List[sly.DatasetInfo]) -> Dict[int, Dict]:
         parent_map.setdefault(dataset.parent_id, []).append(dataset)
 
     def build_tree(parent_id: int) -> Dict[int, Dict]:
-        return {dataset.id: build_tree(dataset.id) for dataset in parent_map.get(parent_id, [])}
+        return {
+            dataset.id: build_tree(dataset.id)
+            for dataset in parent_map.get(parent_id, [])
+        }
 
     # Find root nodes (datasets whose parent_id is not in the list of ids)
     root_nodes = [dataset for dataset in datasets if dataset.parent_id not in ds_ids]
@@ -1361,19 +1485,25 @@ def find_children_in_tree(tree: Dict, parent_id: int):
     return [ds for ds in flatten_tree(tree) if ds.parent_id == parent_id]
 
 
-def replace_project(src_project_info: sly.ProjectInfo, dst_project_info: sly.ProjectInfo):
+def replace_project(
+    src_project_info: sly.ProjectInfo, dst_project_info: sly.ProjectInfo
+):
     """Remove src_rpoject_info and change name of dst_project_info to src_project_info.name"""
     api.project.update(src_project_info.id, name=src_project_info.name + "__to_remove")
     api.project.remove(src_project_info.id)
     return api.project.update(dst_project_info.id, name=src_project_info.name)
 
 
-def replace_dataset(src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.DatasetInfo):
+def replace_dataset(
+    src_dataset_info: sly.DatasetInfo, dst_dataset_info: sly.DatasetInfo
+):
     """Remove src_dataset_info and change name of dst_dataset_info to src_dataset_info.name"""
     api.dataset.update(src_dataset_info.id, name=src_dataset_info.name + "__to_remove")
     api.dataset.remove(src_dataset_info.id)
     return api.dataset.update(
-        dst_dataset_info.id, name=src_dataset_info.name, custom_data=src_dataset_info.custom_data
+        dst_dataset_info.id,
+        name=src_dataset_info.name,
+        custom_data=src_dataset_info.custom_data,
     )
 
 
@@ -1418,9 +1548,13 @@ def copy_project_with_replace(
             updated_at=src_project_info.updated_at if perserve_date else None,
             created_by=src_project_info.created_by_id if perserve_date else None,
         )
-        existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
+        existing_datasets = find_children_in_tree(
+            datasets_tree, parent_id=dst_dataset_id
+        )
         created_datasets.append(
-            CreatedDataset(src_project_info, created_dataset, conflict_resolution_result="copied")
+            CreatedDataset(
+                src_project_info, created_dataset, conflict_resolution_result="copied"
+            )
         )
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1436,7 +1570,9 @@ def copy_project_with_replace(
                 )
             )
         if src_project_info.name in [ds.name for ds in existing_datasets]:
-            existing = [ds for ds in existing_datasets if ds.name == src_project_info.name][0]
+            existing = [
+                ds for ds in existing_datasets if ds.name == src_project_info.name
+            ][0]
             run_in_executor(replace_dataset, existing, created_dataset)
             created_datasets[0].conflict_resolution_result = "replaced"
     else:
@@ -1466,10 +1602,15 @@ def copy_project_with_replace(
                 )
             )
         if src_project_info.name in [pr.name for pr in existing_projects]:
-            existing = [pr for pr in existing_projects if pr.name == src_project_info.name][0]
+            existing = [
+                pr for pr in existing_projects if pr.name == src_project_info.name
+            ][0]
             logger.info(
                 "Replacing project",
-                extra={"existing_project_id": existing.id, "new_project_id": created_project.id},
+                extra={
+                    "existing_project_id": existing.id,
+                    "new_project_id": created_project.id,
+                },
             )
             run_in_executor(replace_project, existing, created_project)
     return created_datasets
@@ -1491,7 +1632,9 @@ def copy_project_with_skip(
     if dst_project_id is not None:
         if datasets_tree is None:
             datasets_tree = run_in_executor(api.dataset.get_tree, dst_project_id)
-        existing_datasets = find_children_in_tree(datasets_tree, parent_id=dst_dataset_id)
+        existing_datasets = find_children_in_tree(
+            datasets_tree, parent_id=dst_dataset_id
+        )
         if src_project_info.name in [ds.name for ds in existing_datasets]:
             progress_cb(src_project_info.items_count)
             logger.info(
@@ -1502,7 +1645,9 @@ def copy_project_with_skip(
                 },
             )
             return []
-        project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        project_meta = run_in_executor(
+            merge_project_meta, src_project_info.id, dst_project_id
+        )
         created_dataset = run_in_executor(
             api_utils.create_dataset,
             api,
@@ -1611,7 +1756,9 @@ def copy_project(
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
-        project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        project_meta = run_in_executor(
+            merge_project_meta, src_project_info.id, dst_project_id
+        )
         created_dataset = run_in_executor(
             api_utils.create_dataset,
             api,
@@ -1707,12 +1854,14 @@ def move_project(
         ds.id for ds in flatten_tree(datasets_tree)
     ]:
         logger.warning(
-            "Moving project to itself. Skipping deletion", extra={"project_id": dst_project_id}
+            "Moving project to itself. Skipping deletion",
+            extra={"project_id": dst_project_id},
         )
         return created_datasets
     if len(created_datasets) == 0:
         logger.info(
-            "No datasets created. Skipping deletion", extra={"project_id": src_project_info.id}
+            "No datasets created. Skipping deletion",
+            extra={"project_id": src_project_info.id},
         )
         return []
 
@@ -1722,7 +1871,9 @@ def move_project(
             extra={"project_id": src_project_info.id},
         )
     else:
-        logger.info("Removing source project", extra={"project_id": src_project_info.id})
+        logger.info(
+            "Removing source project", extra={"project_id": src_project_info.id}
+        )
         run_in_executor(api.project.remove, src_project_info.id)
     cancel_deletion = False
     return created_datasets
@@ -1782,11 +1933,15 @@ def move_datasets_tree(
     )
     if dst_dataset_id in [ds.id for ds in flatten_tree(datasets_tree)]:
         logger.warning(
-            "Moving dataset to itself. Skipping deletion", extra={"dataset_id": dst_dataset_id}
+            "Moving dataset to itself. Skipping deletion",
+            extra={"dataset_id": dst_dataset_id},
         )
         return creted_datasets
     if len(creted_datasets) == 0:
-        logger.info("No datasets created. Skipping deletion", extra={"dataset_id": dst_dataset_id})
+        logger.info(
+            "No datasets created. Skipping deletion",
+            extra={"dataset_id": dst_dataset_id},
+        )
         return []
     # remove only top level datasets, for which a copy was created
     srs_datasets_ids = [ds.id for ds in datasets_tree]
@@ -1814,11 +1969,15 @@ def move_datasets_tree(
     return creted_datasets
 
 
-def get_item_infos(dataset_id: int, item_ids: List[int], project_type: str):
-    filters = [{"field": "id", "operator": "in", "value": item_ids}]
+def get_item_infos(dataset_id: int, item_ids: List[int] = None, project_type: str = sly.ProjectType.IMAGES):
+    filters = None
+    if item_ids is not None:
+        filters = [{"field": "id", "operator": "in", "value": item_ids}]
     if project_type == str(sly.ProjectType.IMAGES):
         return api_utils.images_get_list(api, dataset_id, item_ids)
     if project_type == str(sly.ProjectType.VIDEOS):
+        if item_ids is None:
+            return api.video.get_list(dataset_id)
         return api.video.get_info_by_id_batch(item_ids)
     if project_type == str(sly.ProjectType.VOLUMES):
         return api.volume.get_list(dataset_id, filters)
@@ -2031,6 +2190,182 @@ def copy_or_move(state: Dict, move: bool = False):
             )
 
 
+def get_or_create_dataset_in_dst(
+    src_dataset_info: sly.DatasetInfo,
+    src_datasets: List[sly.DatasetInfo],
+    dst_project_id: int,
+    dst_datasets: List[sly.DatasetInfo],
+):
+    def find_dataset(name, parent_id, datasets):
+        for ds in datasets:
+            if ds.name == name and ds.parent_id == parent_id:
+                return ds
+        return None
+
+    def ensure_dataset_exists(name, parent_id):
+        existing = find_dataset(name, parent_id, dst_datasets)
+        if existing:
+            return existing
+
+        created = api.dataset.create(
+            project_id=dst_project_id,
+            name=name,
+            parent_id=parent_id,
+            change_name_if_conflict=False,
+        )
+        dst_datasets.append(created)
+        logger.info(
+            f"Created dataset '{name}' with parent_id {parent_id}",
+            extra={"dataset_id": created.id},
+        )
+        return created
+
+    src_parents = get_parents_chain(src_dataset_info, src_datasets)
+    src_parents.reverse()
+
+    current_parent_id = None
+    for src_parent in src_parents:
+        dataset = ensure_dataset_exists(src_parent.name, current_parent_id)
+        current_parent_id = dataset.id
+
+    return find_dataset(src_dataset_info.name, current_parent_id, dst_datasets)
+
+
+def merge_datasets(
+    dst_project_id: int,
+    dataset_infos: List[sly.DatasetInfo],
+    options: Dict,
+    progress_cb=None,
+):
+    if len(dataset_infos) == 0:
+        return 0
+    datasets_by_src_project = {}
+    for ds in dataset_infos:
+        datasets_by_src_project.setdefault(ds.project_id, []).append(ds)
+    dst_datasets = api.dataset.get_list(dst_project_id, recursive=True)
+    cloned_n = 0
+    for src_project_id, src_dataset_infos in datasets_by_src_project.items():
+        src_project_info = api.project.get_info_by_id(src_project_id)
+
+        if options.get(JSONKEYS.CLONE_ANNOTATIONS, False):
+            project_meta = merge_project_meta(src_project_id, dst_project_id)
+        else:
+            project_meta = sly.ProjectMeta.from_json(
+                api.project.get_meta(src_project_id)
+            )
+
+        src_datasets = api.dataset.get_list(src_project_id, recursive=True)
+        for src_dataset_info in src_dataset_infos:
+            dst_dataset_info = get_or_create_dataset_in_dst(
+                src_dataset_info, src_datasets, dst_project_id, dst_datasets
+            )
+            cloned = clone_items(
+                src_dataset_id=src_dataset_info.id,
+                dst_dataset_id=dst_dataset_info.id,
+                project_type=src_project_info.type,
+                project_meta=project_meta,
+                options=options,
+                progress_cb=progress_cb,
+            )
+            cloned_n += len(cloned)
+    return cloned_n
+
+def merge_items(dst_project_id: int, items: List[Dict], src_project_info: sly.ProjectInfo, options: Dict, progress_cb=None):
+    item_ids = [item[JSONKEYS.ID] for item in items]
+    src_datasets = api.dataset.get_list(src_project_info.id, recursive=True)
+    dst_datasets = api.dataset.get_list(dst_project_id, recursive=True)
+    if options.get(JSONKEYS.CLONE_ANNOTATIONS, False):
+        project_meta = merge_project_meta(src_project_info.id, dst_project_id)
+    else:
+        project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_info.id))
+    cloned_n = 0
+    tasks = []
+    for src_dataset in src_datasets:
+        tasks.append(executor.submit(get_item_infos, src_dataset.id, None, src_project_info.type))
+    for task in as_completed(tasks):
+        item_infos = task.result()
+        if len(item_infos) == 0:
+            continue
+        this_dataset_item_infos = []
+        for item_info in item_infos:
+            if item_info.id not in item_ids:
+                continue
+            this_dataset_item_infos.append(item_info)
+        if len(this_dataset_item_infos) == 0:
+            continue
+        src_dataset_info = next((ds for ds in src_datasets if ds.id == this_dataset_item_infos[0].dataset_id), None)
+        dst_dataset_info = get_or_create_dataset_in_dst(
+            src_dataset_info, src_datasets=src_datasets, dst_project_id=dst_project_id, dst_datasets=dst_datasets)
+        cloned = clone_items(
+            src_dataset_id=src_dataset_info.id,
+            dst_dataset_id=dst_dataset_info.id,
+            project_type=src_project_info.type,
+            project_meta=project_meta,
+            options=options,
+            progress_cb=progress_cb,
+            src_infos=this_dataset_item_infos
+        )
+        cloned_n = len(cloned)
+    return cloned_n
+            
+def merge(state: Dict):
+    source = state[JSONKEYS.SOURCE]
+    destination = state[JSONKEYS.DESTINATION]
+    options = state[JSONKEYS.OPTIONS]
+    items = state[JSONKEYS.ITEMS]
+
+    src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
+    src_workspace_id = source.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    src_project_id = source.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    src_dataset_id = source.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+
+    dst_team_id = destination[JSONKEYS.TEAM][JSONKEYS.ID]
+    dst_workspace_id = destination.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
+    dst_project_id = destination.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
+    dst_dataset_id = destination.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
+
+    if not dst_project_id:
+        raise ValueError("Destination project ID is required for merge operation")
+
+    project_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT]
+    if len(project_items) > 0:
+        raise ValueError(
+            "Merging projects is not supported. Please select datasets or items to merge."
+        )
+    dataset_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET]
+    image_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.IMAGE]
+
+    items_to_create = len(image_items)
+    if len(dataset_items) > 0:
+        dataset_ids = [item[JSONKEYS.ID] for item in dataset_items]
+        tasks = []
+        for dataset_id in dataset_ids:
+            tasks.append(executor.submit(api.dataset.get_info_by_id, dataset_id))
+        dataset_infos: List[sly.DatasetInfo] = [
+            task.result() for task in as_completed(tasks)
+        ]
+        items_to_create += sum(
+            [ds.items_count for ds in dataset_infos if ds.items_count is not None]
+        )
+
+    progress = sly.Progress(message="Cloning items", total_cnt=items_to_create)
+
+    def _progress_cb(n=1):
+        if not n:
+            return
+        progress.iters_done_report(n)
+
+    cloned_items_n = 0
+    if dataset_items:
+        cloned_items_n += merge_datasets(dst_project_id, dataset_infos, options, progress_cb=_progress_cb)
+    if image_items:
+        if src_project_id is None:
+            raise ValueError("Source project ID is required to merge items")
+        src_project_info = api.project.get_info_by_id(src_project_id)
+        cloned_items_n += merge_items(dst_project_id, items, src_project_info, options, progress_cb=_progress_cb)
+    logger.info(f"Total cloned items: {cloned_items_n}")
+
+
 # ------------------------------------ Transfer Annotated Items ----------------------------------- #
 
 
@@ -2062,7 +2397,9 @@ def _find_parent(id: int, dst_datasets: List[sly.DatasetInfo]):
     return None
 
 
-def get_parents_chain(ds: sly.DatasetInfo, dst_datasets: List[sly.DatasetInfo]):
+def get_parents_chain(
+    ds: sly.DatasetInfo, dst_datasets: List[sly.DatasetInfo]
+) -> List[sly.DatasetInfo]:
     """
     Get chain of parent datasets for defined dataset.
     Returns list of datasets from bottom to top including the dataset itself.
@@ -2108,7 +2445,9 @@ def ensure_datasets_deletion(
         return depth
 
     # Sort datasets by depth (deepest first)
-    sorted_datasets = sorted(dst_datasets, key=lambda ds: get_depth(ds.id), reverse=True)
+    sorted_datasets = sorted(
+        dst_datasets, key=lambda ds: get_depth(ds.id), reverse=True
+    )
 
     # Process datasets from bottom to top
     for ds in sorted_datasets:
@@ -2130,12 +2469,16 @@ def ensure_datasets_deletion(
                 dataset_deletion_map[parent_id] = False
 
     for ds in dst_datasets:
-        logger.info(f"Dataset ID: {ds.id}, Name: {ds.name}, Delete: {dataset_deletion_map[ds.id]}")
+        logger.info(
+            f"Dataset ID: {ds.id}, Name: {ds.name}, Delete: {dataset_deletion_map[ds.id]}"
+        )
 
     return dataset_deletion_map
 
 
-def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_project_id: int):
+def create_dst_backup_version(
+    dst_project: Union[int, sly.ProjectInfo], src_project_id: int
+):
     try:
         if isinstance(dst_project, int):
             dst_project = api.project.get_info_by_id(dst_project)
@@ -2151,15 +2494,21 @@ def create_dst_backup_version(dst_project: Union[int, sly.ProjectInfo], src_proj
             if version:
                 logger.info(f"Latest Version: {version}")
         else:
-            logger.info(f"Versioning is not supported for project type: {dst_project.type}")
+            logger.info(
+                f"Versioning is not supported for project type: {dst_project.type}"
+            )
             version = None
     except Exception as e:
-        logger.error(f"Failed to create version for project ID: {dst_project.id}. Error: {e}")
+        logger.error(
+            f"Failed to create version for project ID: {dst_project.id}. Error: {e}"
+        )
         version = None
     return version
 
 
-def assign_workflow(src_project_id: int, dst_project_id: int, dst_version_id: int = None):
+def assign_workflow(
+    src_project_id: int, dst_project_id: int, dst_version_id: int = None
+):
     """
     Assign MLOps Workflow to source and destination projects.
     """
@@ -2209,11 +2558,15 @@ def transfer_from_dataset(
     create_dataset = False
 
     # Case: src = dataset, dst = project
-    if destination.level == JSONKEYS.PROJECT and not any([parent_dataset, parent_project]):
+    if destination.level == JSONKEYS.PROJECT and not any(
+        [parent_dataset, parent_project]
+    ):
         create_dataset = True
         parent_project = destination.info
     # Case: src = dataset, dst = dataset
-    elif destination.level == JSONKEYS.DATASET and not any([parent_dataset, parent_project]):
+    elif destination.level == JSONKEYS.DATASET and not any(
+        [parent_dataset, parent_project]
+    ):
         create_dataset = True
         parent_dataset = destination.info.parent_id
         parent_project = destination.info.project_id
@@ -2233,7 +2586,9 @@ def transfer_from_dataset(
     if isinstance(src_dataset, int):
         src_dataset = api.dataset.get_info_by_id(src_dataset)
 
-    logger.info(f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
+    logger.info(
+        f"Start processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
+    )
     if src_project is None:
         logger.debug("Getting source ProjectInfo info by dataset ID")
         src_project = api.project.get_info_by_id(src_dataset.project_id)
@@ -2262,24 +2617,32 @@ def transfer_from_dataset(
         return [], None
 
     if isinstance(completed_jobs[0], int):
-        temp_infos = [api.labeling_job.get_info_by_id(job_id) for job_id in completed_jobs]
+        temp_infos = [
+            api.labeling_job.get_info_by_id(job_id) for job_id in completed_jobs
+        ]
         completed_jobs = temp_infos
 
     awaiting_jobs = [job for job in jobs_list if job.status != JSONKEYS.COMPLETED]
     completed_items = []
     intersecting_items = []
     for job in completed_jobs:
-        logger.info(f"Collecting accepted items from job ID: {job.id} with name '{job.name}'")
+        logger.info(
+            f"Collecting accepted items from job ID: {job.id} with name '{job.name}'"
+        )
         job_info = api.labeling_job.get_info_by_id(job.id)
         items = [
-            item for item in job_info.entities if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
+            item
+            for item in job_info.entities
+            if item[JSONKEYS.REVIEW_STATUS] == JSONKEYS.ACCEPTED
         ]
         if len(items) != 0:
             completed_items.extend(items)
 
     completed_ids = list(set([item[JSONKEYS.ID] for item in completed_items]))
     for job in awaiting_jobs:
-        logger.info(f"Collecting intersecting items from job ID: {job.id} with name '{job.name}'")
+        logger.info(
+            f"Collecting intersecting items from job ID: {job.id} with name '{job.name}'"
+        )
         job_info = api.labeling_job.get_info_by_id(job.id)
         intersecting_items.extend(
             [item for item in job_info.entities if item[JSONKEYS.ID] in completed_ids]
@@ -2308,7 +2671,9 @@ def transfer_from_dataset(
                 if src_project.description
                 else ""
             )
-            logger.info("Conflict resolution mode is set to 'rename'. Create dataset with new name")
+            logger.info(
+                "Conflict resolution mode is set to 'rename'. Create dataset with new name"
+            )
             target_dataset = run_in_executor(
                 api.dataset.create,
                 parent_project.id,
@@ -2322,7 +2687,9 @@ def transfer_from_dataset(
             )
             if src_dataset.custom_data:
                 run_in_executor(
-                    api.dataset.update, target_dataset.id, custom_data=src_dataset.custom_data
+                    api.dataset.update,
+                    target_dataset.id,
+                    custom_data=src_dataset.custom_data,
                 )
                 logger.info(f"Dataset custom data has been updated")
         else:
@@ -2353,10 +2720,14 @@ def transfer_from_dataset(
 
     if options.transfer_mode == JSONKEYS.ACTION_MOVE:  # TODO hardcoded to copy for now
         logger.info(f"Start removing {len(move_ids)} items from source dataset")
-        progress_move = tqdm(total=len(move_ids), desc="Removing items from source dataset")
+        progress_move = tqdm(
+            total=len(move_ids), desc="Removing items from source dataset"
+        )
         api.image.remove_batch(move_ids, progress_cb=progress_move)
 
-    logger.info(f"Finished processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'")
+    logger.info(
+        f"Finished processing dataset ID: {src_dataset.id} with name '{src_dataset.name}'"
+    )
     return created_items, target_dataset.project_id
 
 
@@ -2379,7 +2750,9 @@ def transfer_from_project(
 
     if isinstance(src_project, int):
         src_project = api.project.get_info_by_id(src_project)
-    message = f"Start processing project ID: {src_project.id} with name '{src_project.name}'"
+    message = (
+        f"Start processing project ID: {src_project.id} with name '{src_project.name}'"
+    )
     logger.info(
         f"{message}, resulting in a single dataset"
         if not options.preserve_structure
@@ -2388,7 +2761,9 @@ def transfer_from_project(
 
     project_type = src_project.type
     original_description = (
-        f"Original description: {src_project.description}" if src_project.description else ""
+        f"Original description: {src_project.description}"
+        if src_project.description
+        else ""
     )
 
     if options.conflict_resolution_mode != JSONKEYS.CONFLICT_RENAME:
@@ -2400,7 +2775,9 @@ def transfer_from_project(
         destination.level == Level.WORKSPACE
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
-        logger.info(f"Destination is workspace. Creating project with name '{src_project.name}'")
+        logger.info(
+            f"Destination is workspace. Creating project with name '{src_project.name}'"
+        )
         dst_project = api.project.create(
             workspace_id=destination.workspace_id,
             name=src_project.name,
@@ -2409,12 +2786,16 @@ def transfer_from_project(
             change_name_if_conflict=True,
         )
         dst_dataset = None
-        logger.info(f"Project created with ID: {dst_project.id} and name '{dst_project.name}'")
+        logger.info(
+            f"Project created with ID: {dst_project.id} and name '{dst_project.name}'"
+        )
     elif (
         destination.level == Level.PROJECT
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
-        logger.info(f"Destination is project. Creating dataset with name '{src_project.name}'")
+        logger.info(
+            f"Destination is project. Creating dataset with name '{src_project.name}'"
+        )
         dst_project = destination.info
         dst_dataset = run_in_executor(
             api.dataset.create,
@@ -2424,12 +2805,16 @@ def transfer_from_project(
             change_name_if_conflict=True,
             parent_id=None,
         )
-        logger.info(f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'")
+        logger.info(
+            f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'"
+        )
     elif (
         destination.level == Level.DATASET
         and options.conflict_resolution_mode == JSONKEYS.CONFLICT_RENAME
     ):
-        logger.info(f"Destination is dataset. Creating dataset with name '{src_project.name}'")
+        logger.info(
+            f"Destination is dataset. Creating dataset with name '{src_project.name}'"
+        )
         dst_project = api.project.get_info_by_id(destination.info.project_id)
         dst_dataset = run_in_executor(
             api.dataset.create,
@@ -2439,7 +2824,9 @@ def transfer_from_project(
             change_name_if_conflict=True,
             parent_id=destination.info.id,
         )
-        logger.info(f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'")
+        logger.info(
+            f"Dataset created with ID: {dst_dataset.id} and name '{dst_dataset.name}'"
+        )
 
     merged_meta = run_in_executor(merge_project_meta, src_project.id, dst_project.id)
 
@@ -2447,7 +2834,9 @@ def transfer_from_project(
     src_datasets_tree = run_in_executor(api.dataset.get_tree, src_project.id)
     src_datasets: List[sly.DatasetInfo] = flatten_tree_sorted_name(src_datasets_tree)
     logger.info("Start creating empty destination datasets")
-    progress_create_ds = sly.Progress(total_cnt=len(src_datasets), message="Creating datasets")
+    progress_create_ds = sly.Progress(
+        total_cnt=len(src_datasets), message="Creating datasets"
+    )
     for ds, children in src_datasets_tree.items():
         created_datasets.extend(
             create_dataset_recursively(
@@ -2492,10 +2881,14 @@ def transfer_from_project(
         empty_datasets=empty_dst_datasets,
     )
     for ds_id, to_delete in dict(
-        sorted(dataset_deletion_map.items(), key=lambda item: int(item[0]), reverse=True)
+        sorted(
+            dataset_deletion_map.items(), key=lambda item: int(item[0]), reverse=True
+        )
     ).items():
         if to_delete:
-            logger.info(f"Removing dataset ID: {ds_id} with name '{ids_map[ds_id].name}' ")
+            logger.info(
+                f"Removing dataset ID: {ds_id} with name '{ids_map[ds_id].name}' "
+            )
             try:
                 run_in_executor(api.dataset.remove, ds_id)
             except Exception as e:
@@ -2521,7 +2914,9 @@ def transfer_from_project(
         api.project.remove(dst_project.id)
         dst_project = None
 
-    logger.info(f"Finished processing project ID: {src_project.id} with name '{src_project.name}'")
+    logger.info(
+        f"Finished processing project ID: {src_project.id} with name '{src_project.name}'"
+    )
 
     return dst_project
 
@@ -2567,7 +2962,9 @@ def transfer_from_jobs(
             src_dst_project_map[src_dataset.project_id] = dst_project
 
     for src_project_id, dst_project in src_dst_project_map.items():
-        version = create_dst_backup_version(dst_project=dst_project, src_project_id=src_project_id)
+        version = create_dst_backup_version(
+            dst_project=dst_project, src_project_id=src_project_id
+        )
         assign_workflow(
             src_project_id=src_project_id,
             dst_project_id=dst_project.id,
@@ -2575,7 +2972,9 @@ def transfer_from_jobs(
         )
 
 
-def transfer_from_queue(queue_id: int, destination: Destination, options: Options, source: Source):
+def transfer_from_queue(
+    queue_id: int, destination: Destination, options: Options, source: Source
+):
     """
     Transfer annotated items from selected labeling queue to destination project or dataset.
     It is similar to transferring items from jobs, but in this case we collect items from all jobs in the queue.
@@ -2606,10 +3005,16 @@ def transfer_labeled_items(state: Dict):
     if len(source.items) == 0:
         raise ValueError("Items list is empty")
 
-    project_items = [item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT]
-    dataset_items = [item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET]
+    project_items = [
+        item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT
+    ]
+    dataset_items = [
+        item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET
+    ]
     job_items = [item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.JOB]
-    queue_items = [item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.QUEUE]
+    queue_items = [
+        item for item in source.items if item[JSONKEYS.TYPE] == JSONKEYS.QUEUE
+    ]
 
     if len(project_items) > 0:
         for item in project_items:
@@ -2622,7 +3027,9 @@ def transfer_labeled_items(state: Dict):
 
     if len(dataset_items) > 0:
         project_datasets_map = defaultdict(list)
-        dataset_infos = [api.dataset.get_info_by_id(item[JSONKEYS.ID]) for item in dataset_items]
+        dataset_infos = [
+            api.dataset.get_info_by_id(item[JSONKEYS.ID]) for item in dataset_items
+        ]
         for ds in dataset_infos:
             project_datasets_map[ds.project_id].append(ds)
         for src_project_id, datasets in project_datasets_map.items():
@@ -2645,7 +3052,10 @@ def transfer_labeled_items(state: Dict):
     if len(queue_items) > 0:
         for item in queue_items:
             transfer_from_queue(
-                queue_id=item[JSONKEYS.ID], destination=destination, options=options, source=source
+                queue_id=item[JSONKEYS.ID],
+                destination=destination,
+                options=options,
+                source=source,
             )
 
 
@@ -2662,6 +3072,8 @@ def main():
         copy_or_move(state)
     elif action == "transfer_labeled_items":
         transfer_labeled_items(state)
+    elif action == "merge":
+        merge(state)
     else:
         raise ValueError(f"Unsupported action: {action}")
 
