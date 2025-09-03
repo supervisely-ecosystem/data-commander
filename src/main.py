@@ -2224,11 +2224,12 @@ def get_or_create_dataset_in_dst(
     src_parents.reverse()
 
     current_parent_id = None
+    dataset = None
     for src_parent in src_parents:
         dataset = ensure_dataset_exists(src_parent.name, current_parent_id)
         current_parent_id = dataset.id
 
-    return find_dataset(src_dataset_info.name, current_parent_id, dst_datasets)
+    return dataset
 
 
 def merge_datasets(
