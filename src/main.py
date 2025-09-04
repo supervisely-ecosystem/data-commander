@@ -2316,7 +2316,7 @@ def merge_items(dst_project_id: int, items: List[Dict], src_project_info: sly.Pr
             progress_cb=progress_cb,
             src_infos=this_dataset_item_infos
         )
-        cloned_n = len(cloned)
+        cloned_n += len(cloned)
     return cloned_n
             
 def merge(state: Dict):
