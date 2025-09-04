@@ -75,6 +75,7 @@ class JSONKEYS:
     QUEUE = "queue"
     PRESERVE_SRC_STRUCTURE = "preserveStructure"
     TRANSFER_MODE = "transferMode"
+    SAVE_IDS_TO_PROJECT_CUSTOM_DATA = "saveIdsToProjectCustomData"
 
 
 class Level:
@@ -301,7 +302,8 @@ def extract_state_from_env():
                 "options": {
                     "preserveSrcDate": false,
                     "cloneAnnotations": true,
-                    "conflictResolutionMode": "rename"
+                    "conflictResolutionMode": "rename",
+                    "saveIdsToProjectCustomData": false
                 },
                 "destination": {
                     "team": {
@@ -422,6 +424,7 @@ def clone_images_with_annotations(
     def _copy_imgs(
         names,
         infos,
+        options,
     ):
         uploaded = api_utils.images_bulk_add(
             api,
@@ -430,6 +433,9 @@ def clone_images_with_annotations(
             infos,
             perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE],
         )
+        if options[JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA]:
+            sly.env.increment_upload_count(dst_dataset_id, len(uploaded))
+            sly.env.add_uploaded_ids_to_env(dst_dataset_id, [info.id for info in uploaded])
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
@@ -501,6 +507,7 @@ def clone_images_with_annotations(
                 _copy_imgs,
                 names=names,
                 infos=src_image_infos_batch,
+                options=options,
             )
         )
 
@@ -3060,6 +3067,14 @@ def transfer_labeled_items(state: Dict):
             )
 
 
+def _maybe_save_ids_to_project_custom_data(state: Dict):
+    options = state[JSONKEYS.OPTIONS]
+    if options[JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA]:
+        task_id = sly.env.task_id(raise_not_found=False)
+        if task_id is not None:
+            dst_project_id = state[JSONKEYS.DESTINATION][JSONKEYS.PROJECT][JSONKEYS.ID]
+            api.project.add_import_history(id=dst_project_id, task_id=task_id)
+
 # ----------------------------------------- Main Section ----------------------------------------- #
 
 
@@ -3077,6 +3092,7 @@ def main():
         merge(state)
     else:
         raise ValueError(f"Unsupported action: {action}")
+    _maybe_save_ids_to_project_custom_data(state)
 
 
 if __name__ == "__main__":
