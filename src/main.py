@@ -433,7 +433,7 @@ def clone_images_with_annotations(
             infos,
             perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE],
         )
-        if options[JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA]:
+        if options.get(JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA, False):
             sly.env.increment_upload_count(dst_dataset_id, len(uploaded))
             sly.env.add_uploaded_ids_to_env(dst_dataset_id, [info.id for info in uploaded])
         return infos, uploaded
@@ -3069,7 +3069,7 @@ def transfer_labeled_items(state: Dict):
 
 def _maybe_save_ids_to_project_custom_data(state: Dict):
     options = state[JSONKEYS.OPTIONS]
-    if options[JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA]:
+    if options.get(JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA, False):
         task_id = sly.env.task_id(raise_not_found=False)
         if task_id is not None:
             dst_project_id = state[JSONKEYS.DESTINATION][JSONKEYS.PROJECT][JSONKEYS.ID]
