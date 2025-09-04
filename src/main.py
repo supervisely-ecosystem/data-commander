@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from datetime import datetime
 from queue import Queue
 import os
+from threading import Lock
 from collections import defaultdict
 from typing import Dict, List, Literal, Tuple, Union, Optional, Any
 from dotenv import load_dotenv
@@ -29,6 +30,7 @@ UPLOAD_IMAGES_BATCH_SIZE = 1000
 
 api = sly.Api(ignore_task_id=True)
 executor = ThreadPoolExecutor(max_workers=5)
+env_lock = Lock()
 merged_meta = None
 TASK_ID = None
 cancel_deletion = False  # flag to cancel deletion of the source items
@@ -433,9 +435,6 @@ def clone_images_with_annotations(
             infos,
             perserve_dates=options[JSONKEYS.PRESERVE_SRC_DATE],
         )
-        if options.get(JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA, False):
-            sly.env.increment_upload_count(dst_dataset_id, len(uploaded))
-            sly.env.add_uploaded_ids_to_env(dst_dataset_id, [info.id for info in uploaded])
         return infos, uploaded
 
     def _copy_anns(src: List[sly.ImageInfo], dst: List[sly.ImageInfo]):
@@ -1115,6 +1114,10 @@ def clone_items(
         len(dst_infos),
         extra={"src_dataset_id": src_dataset_id, "dst_dataset_id": dst_dataset_id},
     )
+    if options.get(JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA, False):
+        with env_lock:
+            sly.env.increment_upload_count(dst_dataset_id, len(dst_infos))
+            sly.env.add_uploaded_ids_to_env(dst_dataset_id, [info.id for info in dst_infos])
     return dst_infos
 
 
