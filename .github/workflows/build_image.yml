@@ -23,6 +23,11 @@ on:
         required: false
         type: string
         default: ''
+      latest_tag:
+        description: 'Also tag image as "latest"'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-and-push:
@@ -33,5 +38,6 @@ jobs:
     with:
       tag_version: ${{ github.event.inputs.tag_version }}
       dockerfile_path: ${{ github.event.inputs.dockerfile_path }}
-      image_name: ${{ github.event.inputs.image_name }}
+      image_name: "data-commander"
       sdk_version: ${{ github.event.inputs.sdk_version }}
+      latest_tag: ${{ github.event.inputs.latest_tag == 'true' }}
