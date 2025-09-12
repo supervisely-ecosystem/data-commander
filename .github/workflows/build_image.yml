@@ -17,7 +17,7 @@ on:
         description: 'Docker Image Name (optional)'
         required: false
         type: string
-        default: ''
+        default: 'data-commander'
       sdk_version:
         description: 'Supervisely SDK version (optional) - only needed if SDK is installed from branch'
         required: false
