@@ -31,7 +31,7 @@ on:
 
 jobs:
   build-and-push:
-    uses: supervisely-ecosystem/workflows/.github/workflows/build_image.yml@test
+    uses: supervisely-ecosystem/workflows/.github/workflows/build_image.yml@master
     secrets:
       DOCKERHUB_USERNAME: "${{  secrets.DOCKERHUB_USERNAME  }}"
       DOCKERHUB_TOKEN:  "${{  secrets.DOCKERHUB_TOKEN  }}"
