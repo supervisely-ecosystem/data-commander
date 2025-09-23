@@ -34,6 +34,7 @@ env_lock = Lock()
 merged_meta = None
 TASK_ID = None
 cancel_deletion = False  # flag to cancel deletion of the source items
+created_workflows = set()
 
 if sly.is_development():
     api.app.workflow.enable()
@@ -1738,6 +1739,8 @@ def copy_project(
     existing_projects=None,
     datasets_tree=None,
 ) -> List[CreatedDataset]:
+    if dst_project_id is not None:
+        assign_workflow(src_project_info.id, dst_project_id)
     if datasets_tree is None:
         datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
@@ -1841,6 +1844,8 @@ def move_project(
     progress_cb=None,
     existing_projects=None,
 ) -> List[CreatedDataset]:
+    if dst_project_id is not None:
+        assign_workflow(src_project_info.id, dst_project_id)
     global cancel_deletion
     if dst_project_id is None and src_project_info.workspace_id == dst_workspace_id:
         logger.warning(
@@ -2154,6 +2159,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 task.result()
     if len(dataset_items) > 0:
         project_type = src_project_infos[src_project_id].type
+        assign_workflow(src_project_id, dst_project_id)
         if move:
             move_datasets_tree(
                 datasets_tree,
@@ -2175,6 +2181,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 progress_cb=_progress_cb,
             )
     if len(image_items) > 0:
+        assign_workflow(src_project_id, dst_project_id)
         project_type = src_project_infos[src_project_id].type
         if move:
             if src_dataset_id == dst_dataset_id:
@@ -2257,6 +2264,7 @@ def merge_datasets(
     cloned_n = 0
     for src_project_id, src_dataset_infos in datasets_by_src_project.items():
         src_project_info = api.project.get_info_by_id(src_project_id)
+        assign_workflow(src_project_id, dst_project_id)
 
         if options.get(JSONKEYS.CLONE_ANNOTATIONS, False):
             project_meta = merge_project_meta(src_project_id, dst_project_id)
@@ -2372,6 +2380,7 @@ def merge(state: Dict):
     if image_items:
         if src_project_id is None:
             raise ValueError("Source project ID is required to merge items")
+        assign_workflow(src_project_id, dst_project_id)
         src_project_info = api.project.get_info_by_id(src_project_id)
         cloned_items_n += merge_items(dst_project_id, items, src_project_info, options, progress_cb=_progress_cb)
     logger.info(f"Total cloned items: {cloned_items_n}")
@@ -2523,6 +2532,9 @@ def assign_workflow(
     """
     Assign MLOps Workflow to source and destination projects.
     """
+    global created_workflows
+    if (src_project_id, dst_project_id) in created_workflows:
+        return
     src_report = api.app.workflow.add_input_project(src_project_id, task_id=TASK_ID)
     dst_report = api.app.workflow.add_output_project(
         dst_project_id, version_id=dst_version_id, task_id=TASK_ID
@@ -2531,6 +2543,7 @@ def assign_workflow(
         logger.info(
             f"MLOps Workflow saved for source and destination project ID: {src_project_id} → ID: {dst_project_id}"
         )
+    created_workflows.add((src_project_id, dst_project_id))
 
 
 def transfer_from_dataset(
