@@ -2073,6 +2073,8 @@ def copy_or_move(state: Dict, move: bool = False):
     options = state[JSONKEYS.OPTIONS]
     items = state[JSONKEYS.ITEMS]
 
+    logger.debug("Items len: %s", len(items))
+
     src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
     src_workspace_id = source.get(JSONKEYS.WORKSPACE, {}).get(JSONKEYS.ID, None)
     src_project_id = source.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
@@ -2126,6 +2128,7 @@ def copy_or_move(state: Dict, move: bool = False):
         project_meta = merge_project_meta(src_project_id, dst_project_id)
 
     if len(image_items) > 0:
+        logger.debug("Image items len: %s", len(image_items))
         src_project_infos.setdefault(
             src_project_id, api.project.get_info_by_id(src_project_id, raise_error=True)
         )
