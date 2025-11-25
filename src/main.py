@@ -22,11 +22,6 @@ from uuid import UUID
 
 if sly.is_development():
     load_dotenv("local.env")
-    # To remove:
-    # load_dotenv("local_pb_img_to_multiview_from_default.env")
-    # load_dotenv("local_pb_img_multiview.env")
-    # load_dotenv("local_pb_img_multispec.env")
-    # load_dotenv("local_pb_img_multiview.env")
     load_dotenv(os.path.expanduser("~/supervisely.env"))
 
 
@@ -2813,8 +2808,8 @@ def transfer_from_project(
             description=f"Project created from project ID: {src_project.id} with name '{src_project.name}'. {original_description}",
             type=project_type,
             change_name_if_conflict=True,
-            settings=src_project.settings, # new param, requires sdk update
         )
+        api.project.update_settings(dst_project.id, src_project.settings)
         dst_dataset = None
         logger.info(
             f"Project created with ID: {dst_project.id} and name '{dst_project.name}'"
