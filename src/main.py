@@ -1440,6 +1440,7 @@ def copy_project_with_replace(
     progress_cb=None,
     existing_projects=None,
     datasets_tree=None,
+    project_settings: sly.ProjectSettings = None,
 ) -> List[CreatedDataset]:
     if dst_project_id is None and dst_workspace_id == src_project_info.workspace_id:
         logger.warning(
@@ -1456,6 +1457,13 @@ def copy_project_with_replace(
     if dst_project_id is not None:
         # copy project to existing project or existing dataset
         project_meta = merge_project_meta(src_project_info.id, dst_project_id)
+        if project_settings is not None:
+            dst_project_settings_json = run_in_executor(api.project.get_settings, dst_project_id)
+            dst_project_settings = sly.ProjectSettings.from_json(dst_project_settings_json)
+            new_settings = dst_project_settings.clone(
+                labeling_interface=project_settings.labeling_interface
+            )
+            run_in_executor(api.project.update_settings, dst_project_id, new_settings.to_json())
         created_dataset = run_in_executor(
             api_utils.create_dataset,
             api,
@@ -1501,6 +1509,12 @@ def copy_project_with_replace(
         )
         project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
         project_meta = sly.ProjectMeta.from_json(project_meta)
+        if project_settings is not None:
+            run_in_executor(
+                api.project.update_settings,
+                created_project.id,
+                project_settings.to_json(),
+            )
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1537,6 +1551,7 @@ def copy_project_with_skip(
     progress_cb=None,
     existing_projects=None,
     datasets_tree=None,
+    project_settings: sly.ProjectSettings = None,
 ):
     perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
@@ -1556,6 +1571,13 @@ def copy_project_with_skip(
             )
             return []
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        if project_settings is not None:
+            dst_project_settings_json = run_in_executor(api.project.get_settings, dst_project_id)
+            dst_project_settings = sly.ProjectSettings.from_json(dst_project_settings_json)
+            new_settings = dst_project_settings.clone(
+                labeling_interface=project_settings.labeling_interface
+            )
+            run_in_executor(api.project.update_settings, dst_project_id, new_settings.to_json())
         created_dataset = run_in_executor(
             api_utils.create_dataset,
             api,
@@ -1607,6 +1629,12 @@ def copy_project_with_skip(
         )
         project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
         project_meta = sly.ProjectMeta.from_json(project_meta)
+        if project_settings is not None:
+            run_in_executor(
+                api.project.update_settings,
+                created_project.id,
+                project_settings.to_json(),
+            )
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
         if datasets_tree is None:
             datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
@@ -1635,6 +1663,7 @@ def copy_project(
     progress_cb=None,
     existing_projects=None,
     datasets_tree=None,
+    project_settings: sly.ProjectSettings = None,
 ) -> List[CreatedDataset]:
     if dst_project_id is not None:
         assign_workflow(src_project_info.id, dst_project_id)
@@ -1650,6 +1679,7 @@ def copy_project(
             progress_cb,
             existing_projects,
             datasets_tree,
+            project_settings,
         )
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         return copy_project_with_skip(
@@ -1661,12 +1691,20 @@ def copy_project(
             progress_cb,
             existing_projects,
             datasets_tree,
+            project_settings,
         )
     perserve_date = options.get(JSONKEYS.PRESERVE_SRC_DATE, False)
     project_type = src_project_info.type
     created_datasets = []
     if dst_project_id is not None:
         project_meta = run_in_executor(merge_project_meta, src_project_info.id, dst_project_id)
+        if project_settings is not None:
+            dst_project_settings_json = run_in_executor(api.project.get_settings, dst_project_id)
+            dst_project_settings = sly.ProjectSettings.from_json(dst_project_settings_json)
+            new_settings = dst_project_settings.clone(
+                labeling_interface=project_settings.labeling_interface
+            )
+            run_in_executor(api.project.update_settings, dst_project_id, new_settings.to_json())
         created_dataset = run_in_executor(
             api_utils.create_dataset,
             api,
@@ -1713,6 +1751,12 @@ def copy_project(
         project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
         project_meta = sly.ProjectMeta.from_json(project_meta)
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
+        if project_settings is not None:
+            run_in_executor(
+                api.project.update_settings,
+                created_project.id,
+                project_settings.to_json(),
+            )
         datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
         for ds, children in datasets_tree.items():
             created_datasets.extend(
@@ -1738,6 +1782,7 @@ def move_project(
     options: Dict,
     progress_cb=None,
     existing_projects=None,
+    project_settings=None,
 ) -> List[CreatedDataset]:
     if dst_project_id is not None:
         assign_workflow(src_project_info.id, dst_project_id)
@@ -1759,6 +1804,7 @@ def move_project(
         progress_cb=progress_cb,
         existing_projects=existing_projects,
         datasets_tree=datasets_tree,
+        project_settings=project_settings,
     )
     if dst_project_id == src_project_info.id or dst_dataset_id in [
         ds.id for ds in flatten_tree(datasets_tree)
@@ -1978,17 +2024,6 @@ def copy_or_move(state: Dict, move: bool = False):
     dst_project_id = destination.get(JSONKEYS.PROJECT, {}).get(JSONKEYS.ID, None)
     dst_dataset_id = destination.get(JSONKEYS.DATASET, {}).get(JSONKEYS.ID, None)
 
-    src_project_settings = sly.ProjectSettings.from_json(api.project.get_settings(src_project_id))
-    dst_project_settings = sly.ProjectSettings.from_json(api.project.get_settings(dst_project_id))
-
-    if src_project_settings.labeling_interface != dst_project_settings.labeling_interface:
-        logger.info("Labeling interfaces are different between source and destination projects.")
-        logger.info("Changing destination project labeling interface to match source project.")
-        new_settings = dst_project_settings.clone(
-            labeling_interface=src_project_settings.labeling_interface
-        )
-        api.project.update_settings(dst_project_id, new_settings.to_json())
-
     if len(items) == 0:
         raise ValueError("Items list is empty")
 
@@ -2005,10 +2040,13 @@ def copy_or_move(state: Dict, move: bool = False):
 
     items_to_create = 0
     src_project_infos: Dict[int, sly.ProjectInfo] = {}
+    src_project_settings_map: Dict[int, sly.ProjectSettings] = {}
     for item in project_items:
         project_id = item[JSONKEYS.ID]
         project_info = api.project.get_info_by_id(project_id, raise_error=True)
+        project_settings = sly.ProjectSettings.from_json(api.project.get_settings(project_id))
         src_project_infos[project_id] = project_info
+        src_project_settings_map[project_id] = project_settings
         if project_info.items_count is not None:
             items_to_create += project_info.items_count
         # project meta is merged in the copy function
@@ -2049,6 +2087,7 @@ def copy_or_move(state: Dict, move: bool = False):
             tasks = []
             for item in project_items:
                 item_project_info = src_project_infos[item[JSONKEYS.ID]]
+                item_project_settings = src_project_settings_map[item[JSONKEYS.ID]]
                 tasks.append(
                     local_executor.submit(
                         f,
@@ -2059,6 +2098,7 @@ def copy_or_move(state: Dict, move: bool = False):
                         options=options,
                         progress_cb=_progress_cb,
                         existing_projects=existing_projects,
+                        project_settings=item_project_settings,
                     )
                 )
             for task in as_completed(tasks):
