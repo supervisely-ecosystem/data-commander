@@ -16,12 +16,20 @@ from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
 import tempfile
 from supervisely.volume import stl_converter
 from supervisely.project.volume_project import _create_volume_header
+from supervisely.project.project_settings import LabelingInterface
 import api_utils as api_utils
 from uuid import UUID
 
 
 if sly.is_development():
-    load_dotenv("local.env")
+    # load_dotenv("local.env")
+    # To remove:
+    # load_dotenv("local_pb_img_to_multiview_from_default.env")
+    # load_dotenv("local_pb_img_to_multispec_from_default.env")
+    # load_dotenv("local_pb_img_multiview.env")
+    # load_dotenv("local_pb_img_multispec.env")
+    load_dotenv("local_pb_vid_multiview.env")
+    # load_dotenv("local_pb_vid_to_multiview_from_default.env")
     load_dotenv(os.path.expanduser("~/supervisely.env"))
 
 
@@ -591,12 +599,31 @@ def clone_videos_with_annotations(
     def _copy_anns(
         src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]
     ):
+        is_multiview = False
+        try:
+            settings = project_meta.project_settings
+            if settings is not None and settings.labeling_interface == LabelingInterface.MULTIVIEW:
+                is_multiview = True
+        except AttributeError:
+            is_multiview = False
+
         anns_jsons = run_in_executor(
             api.video.annotation.download_bulk,
             src_dataset_id,
             [info.id for info in src],
         )
         dst_ids = [info.id for info in dst]
+
+        if is_multiview:
+            anns = []
+            key_id_map = sly.KeyIdMap()
+            for ann_json in anns_jsons:
+                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                anns.append(ann)
+            api.video.annotation.upload_anns_multiview(dst_ids, anns)
+            return src, dst
+
+        # non-multiview
         tasks = []
         for ann_json, dst_id in zip(anns_jsons, dst_ids):
             key_id_map = sly.KeyIdMap()
