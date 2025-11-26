@@ -1596,7 +1596,7 @@ def copy_project_with_replace(
             project_type=project_type,
             options=options,
         )
-        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id, True)
         project_meta = sly.ProjectMeta.from_json(project_meta)
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
         for ds, children in datasets_tree.items():
@@ -1708,7 +1708,7 @@ def copy_project_with_skip(
             project_type=project_type,
             options=options,
         )
-        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id, True)
         project_meta = sly.ProjectMeta.from_json(project_meta)
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
         if datasets_tree is None:
