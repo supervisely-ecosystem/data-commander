@@ -1296,7 +1296,7 @@ def merge_project_meta(src_project_id, dst_project_id):
     src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
     if src_project_id == dst_project_id:
         return src_project_meta
-    dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id))
+    dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id, True))
     changed = False
     for obj_class in src_project_meta.obj_classes:
         dst_obj_class: sly.ObjClass = dst_project_meta.obj_classes.get(obj_class.name)
@@ -1815,7 +1815,7 @@ def copy_project(
             project_type=project_type,
             options=options,
         )
-        project_meta = run_in_executor(api.project.get_meta, src_project_info.id)
+        project_meta = run_in_executor(api.project.get_meta, src_project_info.id, True)
         project_meta = sly.ProjectMeta.from_json(project_meta)
         run_in_executor(api.project.update_meta, created_project.id, project_meta)
         datasets_tree = run_in_executor(api.dataset.get_tree, src_project_info.id)
@@ -2809,6 +2809,7 @@ def transfer_from_project(
             type=project_type,
             change_name_if_conflict=True,
         )
+        api.project.update_settings(dst_project.id, src_project.settings)
         dst_dataset = None
         logger.info(
             f"Project created with ID: {dst_project.id} and name '{dst_project.name}'"
