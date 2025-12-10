@@ -1313,7 +1313,7 @@ def create_project(
 
 
 def merge_project_meta(src_project_id, dst_project_id):
-    src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
+    src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id, True))
     if src_project_id == dst_project_id:
         return src_project_meta
     dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id, True))
@@ -1403,6 +1403,19 @@ def merge_project_meta(src_project_id, dst_project_id):
                 logger.info(
                     f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
                 )
+    if src_project_meta.project_settings != dst_project_meta.project_settings:
+        new_settings = dst_project_meta.project_settings.clone(
+            multiview_enabled=src_project_meta.project_settings.multiview_enabled,
+            multiview_tag_name=src_project_meta.project_settings.multiview_tag_name,
+            multiview_tag_id=src_project_meta.project_settings.multiview_tag_id,
+            multiview_is_synced=src_project_meta.project_settings.multiview_is_synced,
+            labeling_interface=src_project_meta.project_settings.labeling_interface
+        )
+        dst_project_meta = dst_project_meta.clone(project_settings=new_settings)
+        changed = True
+        logger.info(
+            "Updated project settings in destination project to match source project"
+        )
     return (
         api.project.update_meta(dst_project_id, dst_project_meta)
         if changed
