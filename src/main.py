@@ -16,6 +16,7 @@ from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
 import tempfile
 from supervisely.volume import stl_converter
 from supervisely.project.volume_project import _create_volume_header
+from supervisely.project.project_settings import LabelingInterface
 import api_utils as api_utils
 from uuid import UUID
 
@@ -591,19 +592,30 @@ def clone_videos_with_annotations(
     def _copy_anns(
         src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]
     ):
+
         anns_jsons = run_in_executor(
             api.video.annotation.download_bulk,
             src_dataset_id,
             [info.id for info in src],
         )
         dst_ids = [info.id for info in dst]
+
         tasks = []
-        for ann_json, dst_id in zip(anns_jsons, dst_ids):
+        if project_meta.labeling_interface == LabelingInterface.MULTIVIEW:
+            logger.info("Uploading multiview video annotations...")
+            anns = []
             key_id_map = sly.KeyIdMap()
-            ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
-            tasks.append(
-                executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
-            )
+            for ann_json in anns_jsons:
+                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                anns.append(ann)
+            tasks.append(executor.submit(api.video.annotation.upload_anns_multiview, dst_ids, anns))
+        else:
+            for ann_json, dst_id in zip(anns_jsons, dst_ids):
+                key_id_map = sly.KeyIdMap()
+                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                tasks.append(
+                    executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
+                )
         for task in as_completed(tasks):
             task.result()
         return src, dst
@@ -1293,7 +1305,7 @@ def create_project(
 
 
 def merge_project_meta(src_project_id, dst_project_id):
-    src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id))
+    src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id, True))
     if src_project_id == dst_project_id:
         return src_project_meta
     dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id, True))
@@ -1383,6 +1395,19 @@ def merge_project_meta(src_project_id, dst_project_id):
                 logger.info(
                     f"Changed tag '{tag_meta.name}' in destination project. Changes applied for: {', '.join(changes.keys())}"
                 )
+    if src_project_meta.project_settings != dst_project_meta.project_settings:
+        new_settings = dst_project_meta.project_settings.clone(
+            multiview_enabled=src_project_meta.project_settings.multiview_enabled,
+            multiview_tag_name=src_project_meta.project_settings.multiview_tag_name,
+            multiview_tag_id=src_project_meta.project_settings.multiview_tag_id,
+            multiview_is_synced=src_project_meta.project_settings.multiview_is_synced,
+            labeling_interface=src_project_meta.project_settings.labeling_interface
+        )
+        dst_project_meta = dst_project_meta.clone(project_settings=new_settings)
+        changed = True
+        logger.info(
+            "Updated project settings in destination project to match source project"
+        )
     return (
         api.project.update_meta(dst_project_id, dst_project_meta)
         if changed
