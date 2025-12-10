@@ -592,13 +592,6 @@ def clone_videos_with_annotations(
     def _copy_anns(
         src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]
     ):
-        is_multiview = False
-        try:
-            settings = project_meta.project_settings
-            if settings is not None and settings.labeling_interface == LabelingInterface.MULTIVIEW:
-                is_multiview = True
-        except AttributeError:
-            is_multiview = False
 
         anns_jsons = run_in_executor(
             api.video.annotation.download_bulk,
@@ -607,23 +600,22 @@ def clone_videos_with_annotations(
         )
         dst_ids = [info.id for info in dst]
 
-        if is_multiview:
+        tasks = []
+        if project_meta.labeling_interface == LabelingInterface.MULTIVIEW:
+            logger.info("Uploading multiview video annotations...")
             anns = []
             key_id_map = sly.KeyIdMap()
             for ann_json in anns_jsons:
                 ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
                 anns.append(ann)
-            api.video.annotation.upload_anns_multiview(dst_ids, anns)
-            return src, dst
-
-        # non-multiview
-        tasks = []
-        for ann_json, dst_id in zip(anns_jsons, dst_ids):
-            key_id_map = sly.KeyIdMap()
-            ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
-            tasks.append(
-                executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
-            )
+            tasks.append(executor.submit(api.video.annotation.upload_anns_multiview, dst_ids, anns))
+        else:
+            for ann_json, dst_id in zip(anns_jsons, dst_ids):
+                key_id_map = sly.KeyIdMap()
+                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                tasks.append(
+                    executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
+                )
         for task in as_completed(tasks):
             task.result()
         return src, dst
