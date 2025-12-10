@@ -22,14 +22,7 @@ from uuid import UUID
 
 
 if sly.is_development():
-    # load_dotenv("local.env")
-    # To remove:
-    # load_dotenv("local_pb_img_to_multiview_from_default.env")
-    # load_dotenv("local_pb_img_to_multispec_from_default.env")
-    # load_dotenv("local_pb_img_multiview.env")
-    # load_dotenv("local_pb_img_multispec.env")
-    load_dotenv("local_pb_vid_multiview.env")
-    # load_dotenv("local_pb_vid_to_multiview_from_default.env")
+    load_dotenv("local.env")
     load_dotenv(os.path.expanduser("~/supervisely.env"))
 
 
