@@ -80,6 +80,7 @@ class JSONKEYS:
     PRESERVE_SRC_STRUCTURE = "preserveStructure"
     TRANSFER_MODE = "transferMode"
     SAVE_IDS_TO_PROJECT_CUSTOM_DATA = "saveIdsToProjectCustomData"
+    ITEMS_COUNT = "itemsCount"
 
 
 class Level:
@@ -2147,7 +2148,14 @@ def copy_or_move(state: Dict, move: bool = False):
         src_dataset_ids = [item[JSONKEYS.ID] for item in dataset_items]
         datasets_tree = api.dataset.get_tree(src_project_id)
         datasets_tree = _find_tree(datasets_tree, src_dataset_ids)
-        items_to_create += _count_items_in_tree(datasets_tree)
+        if datasets_tree is not None:
+            items_to_create += _count_items_in_tree(datasets_tree)
+        else:
+            filters = [{"field": "id", "operator": "in", "value": src_dataset_ids}]
+            src_dataset_infos = api.dataset.get_list(
+                src_project_id, filters=filters, recursive=True
+            )
+            items_to_create += sum(ds_info.items_count for ds_info in src_dataset_infos)
         project_meta = merge_project_meta(src_project_id, dst_project_id)
 
     if len(image_items) > 0:
