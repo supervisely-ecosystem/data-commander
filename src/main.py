@@ -1220,6 +1220,7 @@ def create_dataset_recursively(
             if created_info is None:
                 sly.logger.warning(
                     f"Source dataset is not found: id={dataset_info.id}")
+                return
             conflict_resolution_result = "copied"
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                 conflict_resolution_result = "replaced"
