@@ -1217,6 +1217,8 @@ def create_dataset_recursively(
                     )
             # to update items count
             created_info = run_in_executor(api.dataset.get_info_by_id, created_id)
+            if created_info is None:
+                raise RuntimeError("Failed to get created dataset info")
             conflict_resolution_result = "copied"
             if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_REPLACE:
                 conflict_resolution_result = "replaced"
