@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import supervisely as sly
 from supervisely.api.api import ApiField
+from 
 
 
 def create_project(
@@ -77,10 +78,15 @@ def images_get_list(api: sly.Api, dataset_id, image_ids=None):
             dataset_id, fields=api_fields, force_metadata_for_links=False
         )
     else:
-        img_infos = api.image.get_info_by_id_batch(
-            ids=image_ids, fields=api_fields, force_metadata_for_links=False
-        )
-    return img_infos
+        try:
+            img_infos = api.image.get_info_by_id_batch(
+                ids=image_ids, fields=api_fields, force_metadata_for_links=False
+            )
+            sly.logger.info(f"Successfully retrieved {len(img_infos)} image(s)")
+            return img_infos
+        except Exception as e:
+            sly.logger.warning(f"The image(s) with the specified ID(s) was removed or not found. {str(e)}")
+            return
 
 
 def create_dataset(
