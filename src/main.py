@@ -3017,14 +3017,15 @@ def log_and_reset_stats():
     """Log accumulated statistics and reset global counters."""
     global item_stats
     with stats_lock:
-        message = "Conflict resolution summary:"
+        parts = []
         if item_stats["skipped"] > 0:
-            message += f"\n - Skipped items: {item_stats['skipped']}"
+            parts.append(f"Skipped: {item_stats['skipped']}")
         if item_stats["renamed"] > 0:
-            message += f"\n - Renamed items: {item_stats['renamed']}"
+            parts.append(f"Renamed: {item_stats['renamed']}")
         if item_stats["replaced"] > 0:
-            message += f"\n - Replaced items: {item_stats['replaced']}"
-        if message != "Conflict resolution summary:":
+            parts.append(f"Replaced: {item_stats['replaced']}")
+        if parts:
+            message = "Conflict resolution summary: " + " | ".join(parts)
             logger.warning(message)
         # Reset counters
         item_stats["skipped"] = 0
