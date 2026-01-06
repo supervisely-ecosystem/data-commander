@@ -3019,11 +3019,11 @@ def log_and_reset_stats():
     with stats_lock:
         parts = []
         if item_stats["skipped"] > 0:
-            parts.append(f"Skipped: {item_stats['skipped']}")
+            parts.append(f"Skipped={item_stats['skipped']}")
         if item_stats["renamed"] > 0:
-            parts.append(f"Renamed: {item_stats['renamed']}")
+            parts.append(f"Renamed={item_stats['renamed']}")
         if item_stats["replaced"] > 0:
-            parts.append(f"Replaced: {item_stats['replaced']}")
+            parts.append(f"Replaced={item_stats['replaced']}")
         if parts:
             message = "Conflict resolution summary: " + " | ".join(parts)
             logger.warning(message)
