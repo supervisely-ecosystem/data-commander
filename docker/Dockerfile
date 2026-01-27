@@ -1,1 +1,1 @@
-FROM supervisely/base-py-sdk:6.73.486
+FROM supervisely/base-py-sdk:6.73.514
