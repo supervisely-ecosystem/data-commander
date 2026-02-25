@@ -71,6 +71,7 @@ def images_get_list(api: sly.Api, dataset_id, image_ids=None):
         ApiField.META,
         ApiField.PATH_ORIGINAL,
         ApiField.CREATED_BY_ID[0][0],
+        ApiField.DESCRIPTION,
     ]
     if image_ids is None:
         img_infos = api.image.get_list(
@@ -151,6 +152,8 @@ def images_bulk_add(
             img_json[ApiField.LINK] = img_info.link
         elif img_info.hash is not None:
             img_json[ApiField.HASH] = img_info.hash
+        if img_info.description is not None:
+            img_json[ApiField.DESCRIPTION] = img_info.description
         img_data.append(img_json)
 
     try:
