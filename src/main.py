@@ -879,7 +879,7 @@ def clone_pointclouds_with_annotations(
             ann = sly.PointcloudAnnotation.from_json(ann_json, project_meta, key_id_map)
 
             sly.logger.debug(
-                f"Copying annotations for pointcloud id={dst_id} with {len(ann.spatial_figures)} spatial figures and {len(ann.tags)} tags."
+                f"Copying annotations for pointcloud id={dst_id}."
             )
 
             tasks.append(
