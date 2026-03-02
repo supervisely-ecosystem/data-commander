@@ -962,6 +962,10 @@ def clone_pointcloud_episodes_with_annotations(
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing = api.pointcloud_episode.get_list(dst_dataset_id)
     existing = {info.name: info for info in existing}
+    reserved_names = set(existing.keys())
+    reserved_names_lock = Lock()
+    source_names_seen = set()
+    source_names_lock = Lock()
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
             info for info in pointcloud_episode_infos if info.name not in existing
@@ -981,6 +985,7 @@ def clone_pointcloud_episodes_with_annotations(
         to_remove = []
         to_rename = {}
         for i, name in enumerate(names):
+            should_replace = False
             if name in existing:
                 if (
                     options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
@@ -997,6 +1002,7 @@ def clone_pointcloud_episodes_with_annotations(
                     options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
                     == JSONKEYS.CONFLICT_REPLACE
                 ):
+                    should_replace = True
                     names[i] = (
                         ".".join(name.split(".")[:-1])
                         + "_"
@@ -1004,8 +1010,32 @@ def clone_pointcloud_episodes_with_annotations(
                         + "."
                         + name.split(".")[-1]
                     )
-                    to_remove.append(name)
-                    to_rename[names[i]] = name
+
+            with reserved_names_lock:
+                if names[i] in reserved_names:
+                    base_name, ext = os.path.splitext(names[i])
+                    suffix_idx = 1
+                    candidate_name = f"{base_name}_{suffix_idx}{ext}"
+                    while candidate_name in reserved_names:
+                        suffix_idx += 1
+                        candidate_name = f"{base_name}_{suffix_idx}{ext}"
+                    names[i] = candidate_name
+                reserved_names.add(names[i])
+
+            if should_replace:
+                to_remove.append(name)
+                to_rename[names[i]] = name
+
+            with source_names_lock:
+                if names[i] in source_names_seen:
+                    base_name, ext = os.path.splitext(names[i])
+                    suffix_idx = 1
+                    candidate_name = f"{base_name}_{suffix_idx}{ext}"
+                    while candidate_name in source_names_seen:
+                        suffix_idx += 1
+                        candidate_name = f"{base_name}_{suffix_idx}{ext}"
+                    names[i] = candidate_name
+                source_names_seen.add(names[i])
         dst_infos = api.pointcloud_episode.upload_hashes(
             dataset_id=dst_dataset_id,
             names=names,
@@ -1013,15 +1043,17 @@ def clone_pointcloud_episodes_with_annotations(
             metas=metas,
         )
         if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
-            run_in_executor(api.image.remove_batch, rm_ids)
+            rm_ids = [existing[name].id for name in to_remove if name in existing]
+            run_in_executor(api.pointcloud_episode.remove_batch, rm_ids)
         if to_rename:
             rename_tasks = []
             for dst_info in dst_infos:
                 if dst_info.name in to_rename:
                     rename_tasks.append(
                         executor.submit(
-                            api.image.edit, dst_info.id, name=to_rename[dst_info.name]
+                            api.pointcloud_episode.rename,
+                            dst_info.id,
+                            to_rename[dst_info.name],
                         )
                     )
             for task in as_completed(rename_tasks):
