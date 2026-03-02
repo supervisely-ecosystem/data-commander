@@ -967,9 +967,15 @@ def clone_pointcloud_episodes_with_annotations(
 
     src_dataset_id = pointcloud_episode_infos[0].dataset_id
     frame_to_pointcloud_ids = {}
-    related_images_existing = {
-        info.name: info for info in run_in_executor(api.image.get_list, dst_dataset_id)
-    }
+    dst_pointcloud_episodes = run_in_executor(api.pointcloud_episode.get_list, dst_dataset_id)
+    related_images_existing = {}
+    for dst_pointcloud_episode in dst_pointcloud_episodes:
+        rel_images = run_in_executor(
+            api.pointcloud_episode.get_list_related_images,
+            dst_pointcloud_episode.id,
+        )
+        for rel_image in rel_images:
+            related_images_existing[rel_image[sly.api.ApiField.NAME]] = rel_image
     related_images_lock = Lock()
 
     def _make_unique_name(name: str, reserved_names: set) -> str:
