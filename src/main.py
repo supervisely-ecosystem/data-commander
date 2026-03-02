@@ -955,8 +955,8 @@ def clone_pointcloud_episodes_with_annotations(
     options,
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
-    existing = api.pointcloud_episode.get_list(dst_dataset_id)
-    existing = {info.name: info for info in existing}
+    existing_pointcloud_episodes = api.pointcloud_episode.get_list(dst_dataset_id)
+    existing = {info.name: info for info in existing_pointcloud_episodes}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
             info for info in pointcloud_episode_infos if info.name not in existing
@@ -964,10 +964,10 @@ def clone_pointcloud_episodes_with_annotations(
 
     if len(pointcloud_episode_infos) == 0:
         return []
-
+    
     src_dataset_id = pointcloud_episode_infos[0].dataset_id
     frame_to_pointcloud_ids = {}
-    dst_pointcloud_episodes = run_in_executor(api.pointcloud_episode.get_list, dst_dataset_id)
+    dst_pointcloud_episodes = existing_pointcloud_episodes
     related_images_existing = {}
     for dst_pointcloud_episode in dst_pointcloud_episodes:
         rel_images = run_in_executor(
