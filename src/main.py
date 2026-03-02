@@ -957,8 +957,18 @@ def clone_pointcloud_episodes_with_annotations(
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing = api.pointcloud_episode.get_list(dst_dataset_id)
     existing = {info.name: info for info in existing}
-    related_existing = run_in_executor(api.image.get_list, dst_dataset_id)
-    related_existing = {info.name: info for info in related_existing}
+
+    def _get_related_images_map(dst_infos):
+        related_by_name = {}
+        for dst_info in dst_infos.values():
+            rel_images = api.pointcloud_episode.get_list_related_images(id=dst_info.id)
+            for rel_img in rel_images:
+                rel_name = rel_img[sly.api.ApiField.NAME]
+                if rel_name not in related_by_name:
+                    related_by_name[rel_name] = rel_img
+        return related_by_name
+
+    related_existing = _get_related_images_map(existing)
     reserved_related_names = set(related_existing.keys())
     removed_related_ids = set()
     related_names_lock = Lock()
@@ -1023,7 +1033,7 @@ def clone_pointcloud_episodes_with_annotations(
             metas=metas,
         )
         if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
+            rm_ids = [existing[name].id for name in to_remove if name in existing]
             run_in_executor(api.image.remove_batch, rm_ids)
         if to_rename:
             rename_tasks = []
@@ -1062,9 +1072,10 @@ def clone_pointcloud_episodes_with_annotations(
                         elif mode == JSONKEYS.CONFLICT_REPLACE:
                             if src_name in related_existing:
                                 info = related_existing.pop(src_name)
-                                if info.id not in removed_related_ids:
-                                    remove_ids.append(info.id)
-                                    removed_related_ids.add(info.id)
+                                info_id = info[sly.api.ApiField.ID]
+                                if info_id not in removed_related_ids:
+                                    remove_ids.append(info_id)
+                                    removed_related_ids.add(info_id)
                             else:
                                 dst_name = _make_unique_name(src_name, reserved_related_names)
                     reserved_related_names.add(dst_name)
