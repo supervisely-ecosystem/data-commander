@@ -957,6 +957,11 @@ def clone_pointcloud_episodes_with_annotations(
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing = api.pointcloud_episode.get_list(dst_dataset_id)
     existing = {info.name: info for info in existing}
+    related_existing = run_in_executor(api.image.get_list, dst_dataset_id)
+    related_existing = {info.name: info for info in related_existing}
+    reserved_related_names = set(related_existing.keys())
+    removed_related_ids = set()
+    related_names_lock = Lock()
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
             info for info in pointcloud_episode_infos if info.name not in existing
@@ -967,6 +972,16 @@ def clone_pointcloud_episodes_with_annotations(
 
     src_dataset_id = pointcloud_episode_infos[0].dataset_id
     frame_to_pointcloud_ids = {}
+
+    def _make_unique_name(name: str, reserved: set) -> str:
+        base, ext = os.path.splitext(name)
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+        candidate = f"{base}_{now}{ext}"
+        suffix = 1
+        while candidate in reserved:
+            candidate = f"{base}_{now}_{suffix}{ext}"
+            suffix += 1
+        return candidate
 
     def _upload_hashes(infos):
         names = [info.name for info in infos]
@@ -1032,17 +1047,39 @@ def clone_pointcloud_episodes_with_annotations(
 
         rel_images = api.pointcloud_episode.get_list_related_images(id=src_id)
         if len(rel_images) != 0:
+            mode = options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
             rimg_infos = []
+            remove_ids = []
             for rel_img in rel_images:
+                src_name = rel_img[sly.api.ApiField.NAME]
+                dst_name = src_name
+                with related_names_lock:
+                    if src_name in reserved_related_names:
+                        if mode == JSONKEYS.CONFLICT_SKIP:
+                            continue
+                        if mode == JSONKEYS.CONFLICT_RENAME:
+                            dst_name = _make_unique_name(src_name, reserved_related_names)
+                        elif mode == JSONKEYS.CONFLICT_REPLACE:
+                            if src_name in related_existing:
+                                info = related_existing.pop(src_name)
+                                if info.id not in removed_related_ids:
+                                    remove_ids.append(info.id)
+                                    removed_related_ids.add(info.id)
+                            else:
+                                dst_name = _make_unique_name(src_name, reserved_related_names)
+                    reserved_related_names.add(dst_name)
                 rimg_infos.append(
                     {
                         sly.api.ApiField.ENTITY_ID: dst_info.id,
-                        sly.api.ApiField.NAME: rel_img[sly.api.ApiField.NAME],
+                        sly.api.ApiField.NAME: dst_name,
                         sly.api.ApiField.HASH: rel_img[sly.api.ApiField.HASH],
                         sly.api.ApiField.META: rel_img[sly.api.ApiField.META],
                     }
                 )
-            api.pointcloud_episode.add_related_images(rimg_infos)
+            if remove_ids:
+                run_in_executor(api.image.remove_batch, remove_ids)
+            if len(rimg_infos) != 0:
+                api.pointcloud_episode.add_related_images(rimg_infos)
 
         if progress_cb is not None:
             progress_cb()
