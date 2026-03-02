@@ -964,8 +964,6 @@ def clone_pointcloud_episodes_with_annotations(
     existing = {info.name: info for info in existing}
     reserved_names = set(existing.keys())
     reserved_names_lock = Lock()
-    source_names_seen = set()
-    source_names_lock = Lock()
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
             info for info in pointcloud_episode_infos if info.name not in existing
@@ -1025,17 +1023,6 @@ def clone_pointcloud_episodes_with_annotations(
             if should_replace:
                 to_remove.append(name)
                 to_rename[names[i]] = name
-
-            with source_names_lock:
-                if names[i] in source_names_seen:
-                    base_name, ext = os.path.splitext(names[i])
-                    suffix_idx = 1
-                    candidate_name = f"{base_name}_{suffix_idx}{ext}"
-                    while candidate_name in source_names_seen:
-                        suffix_idx += 1
-                        candidate_name = f"{base_name}_{suffix_idx}{ext}"
-                    names[i] = candidate_name
-                source_names_seen.add(names[i])
         dst_infos = api.pointcloud_episode.upload_hashes(
             dataset_id=dst_dataset_id,
             names=names,
