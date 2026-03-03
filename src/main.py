@@ -5,7 +5,7 @@ from queue import Queue
 import os
 from threading import Lock
 from collections import defaultdict
-from typing import Dict, List, Literal, Tuple, Union, Optional, Any
+from typing import Dict, List, Literal, Set, Tuple, Union, Optional, Any
 from dotenv import load_dotenv
 from supervisely import logger
 import supervisely as sly
@@ -15,6 +15,7 @@ from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
 from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
 import tempfile
 from supervisely.volume import stl_converter
+from supervisely._utils import generate_free_name
 from supervisely.project.volume_project import _create_volume_header
 from supervisely.project.project_settings import LabelingInterface
 import api_utils as api_utils
@@ -956,8 +957,9 @@ def clone_pointcloud_episodes_with_annotations(
     options,
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
-    existing = api.pointcloud_episode.get_list(dst_dataset_id)
-    existing = {info.name: info for info in existing}
+    existing_infos = api.pointcloud_episode.get_list(dst_dataset_id)
+    frames_count = max([info.meta["frame"] for info in existing_infos]) if existing_infos else 0
+    existing = {info.name: info for info in existing_infos}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
             info for info in pointcloud_episode_infos if info.name not in existing
@@ -970,9 +972,14 @@ def clone_pointcloud_episodes_with_annotations(
     frame_to_pointcloud_ids = {}
 
     def _upload_hashes(infos):
+        nonlocal frames_count
         names = [info.name for info in infos]
         hashes = [info.hash for info in infos]
-        metas = [info.meta for info in infos]
+        metas = []
+        for info in infos:
+            frames_count += 1
+            meta = {**info.meta, "frame": frames_count}
+            metas.append(meta)
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         to_remove = []
         to_rename = {}
@@ -1009,7 +1016,7 @@ def clone_pointcloud_episodes_with_annotations(
             metas=metas,
         )
         if to_remove:
-            rm_ids = [info.id for info in existing if info.name in to_remove]
+            rm_ids = [info.id for info in existing_infos if info.name in to_remove]
             run_in_executor(api.image.remove_batch, rm_ids)
         if to_rename:
             rename_tasks = []
@@ -1028,17 +1035,19 @@ def clone_pointcloud_episodes_with_annotations(
                 ]
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
-    def _upload_single(src_id, dst_info):
+    def _upload_single(src_id, dst_info, existing_names: Set[str]):
         frame_to_pointcloud_ids[dst_info.meta["frame"]] = dst_info.id
 
         rel_images = api.pointcloud_episode.get_list_related_images(id=src_id)
         if len(rel_images) != 0:
             rimg_infos = []
             for rel_img in rel_images:
+                name = rel_img[sly.api.ApiField.NAME]
+                name = generate_free_name(existing_names, name, "." in name, True)
                 rimg_infos.append(
                     {
                         sly.api.ApiField.ENTITY_ID: dst_info.id,
-                        sly.api.ApiField.NAME: rel_img[sly.api.ApiField.NAME],
+                        sly.api.ApiField.NAME: name,
                         sly.api.ApiField.HASH: rel_img[sly.api.ApiField.HASH],
                         sly.api.ApiField.META: rel_img[sly.api.ApiField.META],
                     }
@@ -1047,6 +1056,11 @@ def clone_pointcloud_episodes_with_annotations(
 
         if progress_cb is not None:
             progress_cb()
+
+    def _get_rimg_names(dataset_id):
+        _ids = [info.id for info in existing_infos]
+        rimgs = api.pointcloud_episode.get_list_related_images_batch(dataset_id, _ids)
+        return {info["name"] for info in rimgs}
 
     copy_imgs_tasks = []
     for batch in sly.batched(pointcloud_episode_infos):
@@ -1071,10 +1085,12 @@ def clone_pointcloud_episodes_with_annotations(
     for task in as_completed(copy_imgs_tasks):
         src_to_dst_dict = task.result()
         dst_infos_dict.update(src_to_dst_dict)
+        existing_names = _get_rimg_names(dst_dataset_id)
+
         if options[JSONKEYS.CLONE_ANNOTATIONS]:
             for src_id, dst_info in src_to_dst_dict.items():
                 copy_anns_tasks.append(
-                    executor.submit(_upload_single, src_id, dst_info)
+                    executor.submit(_upload_single, src_id, dst_info, existing_names)
                 )
 
     for task in as_completed(copy_anns_tasks):
