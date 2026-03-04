@@ -958,7 +958,7 @@ def clone_pointcloud_episodes_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing_infos = api.pointcloud_episode.get_list(dst_dataset_id)
-    frames_count = max([info.meta["frame"] for info in existing_infos]) if existing_infos else 0
+    frames_count = max([info.meta.get("frame", 0) for info in existing_infos]) if existing_infos else 0
     existing = {info.name: info for info in existing_infos}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
@@ -1059,6 +1059,8 @@ def clone_pointcloud_episodes_with_annotations(
 
     def _get_rimg_names(dataset_id):
         _ids = [info.id for info in existing_infos]
+        if not _ids:
+            return set()
         rimgs = api.pointcloud_episode.get_list_related_images_batch(dataset_id, _ids)
         return {info["name"] for info in rimgs}
 
