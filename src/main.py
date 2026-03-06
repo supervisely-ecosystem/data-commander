@@ -958,7 +958,7 @@ def clone_pointcloud_episodes_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing_infos = api.pointcloud_episode.get_list(dst_dataset_id)
-    frames_count = max([info.meta.get("frame", 0) for info in existing_infos]) if existing_infos else 0
+    frames_count = max([info.meta.get("frame", 0) for info in existing_infos]) if existing_infos else None
     existing = {info.name: info for info in existing_infos}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
@@ -977,7 +977,7 @@ def clone_pointcloud_episodes_with_annotations(
         hashes = [info.hash for info in infos]
         metas = []
         for info in infos:
-            frames_count += 1
+            frames_count = frames_count + 1 if frames_count is not None else 0
             meta = {**info.meta, "frame": frames_count}
             metas.append(meta)
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -1025,14 +1025,18 @@ def clone_pointcloud_episodes_with_annotations(
                     rename_tasks.append(
                         executor.submit(
                             api.image.edit, dst_info.id, name=to_rename[dst_info.name]
+                            # ? returns ImageInfo, but we need PointcloudEpisodeInfo ?
                         )
                     )
             for task in as_completed(rename_tasks):
                 info = task.result()
-                dst_infos = [
-                    info if info.id == dst_info.id else dst_info
-                    for dst_info in dst_infos
-                ]
+                # ? workaround to update the name in dst_infos
+                for idx, dst_info in enumerate(dst_infos):
+                    if dst_info.id == info.id:
+                        info_dict = api.pointcloud_episode.convert_info_to_json(dst_info)
+                        if "name" in info_dict:
+                            info_dict["name"] = to_rename[dst_info.name]
+                            dst_infos[idx] = api.pointcloud_episode._convert_json_info(info_dict)
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _upload_single(src_id, dst_info, existing_names: Set[str]):
