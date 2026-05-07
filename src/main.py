@@ -1,26 +1,26 @@
 import ast
+import os
+import tempfile
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from datetime import datetime
 from queue import Queue
-import os
 from threading import Lock
-from collections import defaultdict
-from typing import Dict, List, Literal, Set, Tuple, Union, Optional, Any
-from dotenv import load_dotenv
-from supervisely import logger
-import supervisely as sly
-from tqdm import tqdm
-from supervisely.api.labeling_job_api import LabelingJobInfo
-from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
-from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
-import tempfile
-from supervisely.volume import stl_converter
-from supervisely._utils import generate_free_name
-from supervisely.project.volume_project import _create_volume_header
-from supervisely.project.project_settings import LabelingInterface
-import api_utils as api_utils
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from uuid import UUID
 
+import api_utils as api_utils
+import supervisely as sly
+from dotenv import load_dotenv
+from supervisely import logger
+from supervisely._utils import generate_free_name
+from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
+from supervisely.api.labeling_job_api import LabelingJobInfo
+from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
+from supervisely.project.project_settings import LabelingInterface
+from supervisely.project.volume_project import _create_volume_header
+from supervisely.volume import stl_converter
+from tqdm import tqdm
 
 if sly.is_development():
     load_dotenv("local.env")
@@ -91,7 +91,6 @@ class Level:
 
 
 class Destination:
-
     def __init__(
         self,
         team_id: int,
@@ -152,7 +151,6 @@ class Destination:
 
 
 class Source:
-
     def __init__(
         self,
         team_id: int,
@@ -609,13 +607,19 @@ def clone_videos_with_annotations(
             for ann_json in anns_jsons:
                 ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
                 anns.append(ann)
-            tasks.append(executor.submit(api.video.annotation.upload_anns_multiview, dst_ids, anns))
+            tasks.append(
+                executor.submit(
+                    api.video.annotation.upload_anns_multiview, dst_ids, anns
+                )
+            )
         else:
             for ann_json, dst_id in zip(anns_jsons, dst_ids):
                 key_id_map = sly.KeyIdMap()
                 ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
                 tasks.append(
-                    executor.submit(api.video.annotation.append, dst_id, ann, key_id_map)
+                    executor.submit(
+                        api.video.annotation.append, dst_id, ann, key_id_map
+                    )
                 )
         for task in as_completed(tasks):
             task.result()
@@ -958,7 +962,11 @@ def clone_pointcloud_episodes_with_annotations(
     progress_cb=None,
 ) -> List[sly.api.pointcloud_api.PointcloudInfo]:
     existing_infos = api.pointcloud_episode.get_list(dst_dataset_id)
-    frames_count = max([info.meta.get("frame", 0) for info in existing_infos]) if existing_infos else None
+    frames_count = (
+        max([info.meta.get("frame", 0) for info in existing_infos])
+        if existing_infos
+        else None
+    )
     existing = {info.name: info for info in existing_infos}
     if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
         pointcloud_episode_infos = [
@@ -1024,7 +1032,9 @@ def clone_pointcloud_episodes_with_annotations(
                 if dst_info.name in to_rename:
                     rename_tasks.append(
                         executor.submit(
-                            api.image.edit, dst_info.id, name=to_rename[dst_info.name]
+                            api.image.edit,
+                            dst_info.id,
+                            name=to_rename[dst_info.name],
                             # ? returns ImageInfo, but we need PointcloudEpisodeInfo ?
                         )
                     )
@@ -1033,10 +1043,14 @@ def clone_pointcloud_episodes_with_annotations(
                 # ? workaround to update the name in dst_infos
                 for idx, dst_info in enumerate(dst_infos):
                     if dst_info.id == info.id:
-                        info_dict = api.pointcloud_episode.convert_info_to_json(dst_info)
+                        info_dict = api.pointcloud_episode.convert_info_to_json(
+                            dst_info
+                        )
                         if "name" in info_dict:
                             info_dict["name"] = to_rename[dst_info.name]
-                            dst_infos[idx] = api.pointcloud_episode._convert_json_info(info_dict)
+                            dst_infos[idx] = api.pointcloud_episode._convert_json_info(
+                                info_dict
+                            )
         return {src.id: dst for src, dst in zip(infos, dst_infos)}
 
     def _upload_single(src_id, dst_info, existing_names: Set[str]):
@@ -1153,7 +1167,9 @@ def clone_items(
     if options.get(JSONKEYS.SAVE_IDS_TO_PROJECT_CUSTOM_DATA, False):
         with env_lock:
             sly.env.increment_upload_count(dst_dataset_id, len(dst_infos))
-            sly.env.add_uploaded_ids_to_env(dst_dataset_id, [info.id for info in dst_infos])
+            sly.env.add_uploaded_ids_to_env(
+                dst_dataset_id, [info.id for info in dst_infos]
+            )
     return dst_infos
 
 
@@ -1328,10 +1344,14 @@ def create_project(
 
 
 def merge_project_meta(src_project_id, dst_project_id):
-    src_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_id, True))
+    src_project_meta = sly.ProjectMeta.from_json(
+        api.project.get_meta(src_project_id, True)
+    )
     if src_project_id == dst_project_id:
         return src_project_meta
-    dst_project_meta = sly.ProjectMeta.from_json(api.project.get_meta(dst_project_id, True))
+    dst_project_meta = sly.ProjectMeta.from_json(
+        api.project.get_meta(dst_project_id, True)
+    )
     changed = False
     for obj_class in src_project_meta.obj_classes:
         dst_obj_class: sly.ObjClass = dst_project_meta.obj_classes.get(obj_class.name)
@@ -1424,7 +1444,7 @@ def merge_project_meta(src_project_id, dst_project_id):
             multiview_tag_name=src_project_meta.project_settings.multiview_tag_name,
             multiview_tag_id=src_project_meta.project_settings.multiview_tag_id,
             multiview_is_synced=src_project_meta.project_settings.multiview_is_synced,
-            labeling_interface=src_project_meta.project_settings.labeling_interface
+            labeling_interface=src_project_meta.project_settings.labeling_interface,
         )
         dst_project_meta = dst_project_meta.clone(project_settings=new_settings)
         changed = True
@@ -2032,7 +2052,11 @@ def move_datasets_tree(
     return creted_datasets
 
 
-def get_item_infos(dataset_id: int, item_ids: List[int] = None, project_type: str = sly.ProjectType.IMAGES):
+def get_item_infos(
+    dataset_id: int,
+    item_ids: List[int] = None,
+    project_type: str = sly.ProjectType.IMAGES,
+):
     filters = None
     if item_ids is not None:
         filters = [{"field": "id", "operator": "in", "value": item_ids}]
@@ -2337,18 +2361,29 @@ def merge_datasets(
             cloned_n += len(cloned)
     return cloned_n
 
-def merge_items(dst_project_id: int, items: List[Dict], src_project_info: sly.ProjectInfo, options: Dict, progress_cb=None):
+
+def merge_items(
+    dst_project_id: int,
+    items: List[Dict],
+    src_project_info: sly.ProjectInfo,
+    options: Dict,
+    progress_cb=None,
+):
     item_ids = [item[JSONKEYS.ID] for item in items]
     src_datasets = api.dataset.get_list(src_project_info.id, recursive=True)
     dst_datasets = api.dataset.get_list(dst_project_id, recursive=True)
     if options.get(JSONKEYS.CLONE_ANNOTATIONS, False):
         project_meta = merge_project_meta(src_project_info.id, dst_project_id)
     else:
-        project_meta = sly.ProjectMeta.from_json(api.project.get_meta(src_project_info.id))
+        project_meta = sly.ProjectMeta.from_json(
+            api.project.get_meta(src_project_info.id)
+        )
     cloned_n = 0
     tasks = []
     for src_dataset in src_datasets:
-        tasks.append(executor.submit(get_item_infos, src_dataset.id, None, src_project_info.type))
+        tasks.append(
+            executor.submit(get_item_infos, src_dataset.id, None, src_project_info.type)
+        )
     for task in as_completed(tasks):
         item_infos = task.result()
         if len(item_infos) == 0:
@@ -2360,9 +2395,20 @@ def merge_items(dst_project_id: int, items: List[Dict], src_project_info: sly.Pr
             this_dataset_item_infos.append(item_info)
         if len(this_dataset_item_infos) == 0:
             continue
-        src_dataset_info = next((ds for ds in src_datasets if ds.id == this_dataset_item_infos[0].dataset_id), None)
+        src_dataset_info = next(
+            (
+                ds
+                for ds in src_datasets
+                if ds.id == this_dataset_item_infos[0].dataset_id
+            ),
+            None,
+        )
         dst_dataset_info = get_or_create_dataset_in_dst(
-            src_dataset_info, src_datasets=src_datasets, dst_project_id=dst_project_id, dst_datasets=dst_datasets)
+            src_dataset_info,
+            src_datasets=src_datasets,
+            dst_project_id=dst_project_id,
+            dst_datasets=dst_datasets,
+        )
         cloned = clone_items(
             src_dataset_id=src_dataset_info.id,
             dst_dataset_id=dst_dataset_info.id,
@@ -2370,11 +2416,12 @@ def merge_items(dst_project_id: int, items: List[Dict], src_project_info: sly.Pr
             project_meta=project_meta,
             options=options,
             progress_cb=progress_cb,
-            src_infos=this_dataset_item_infos
+            src_infos=this_dataset_item_infos,
         )
         cloned_n += len(cloned)
     return cloned_n
-            
+
+
 def merge(state: Dict):
     source = state[JSONKEYS.SOURCE]
     destination = state[JSONKEYS.DESTINATION]
@@ -2424,13 +2471,17 @@ def merge(state: Dict):
 
     cloned_items_n = 0
     if dataset_items:
-        cloned_items_n += merge_datasets(dst_project_id, dataset_infos, options, progress_cb=_progress_cb)
+        cloned_items_n += merge_datasets(
+            dst_project_id, dataset_infos, options, progress_cb=_progress_cb
+        )
     if image_items:
         if src_project_id is None:
             raise ValueError("Source project ID is required to merge items")
         assign_workflow(src_project_id, dst_project_id)
         src_project_info = api.project.get_info_by_id(src_project_id)
-        cloned_items_n += merge_items(dst_project_id, items, src_project_info, options, progress_cb=_progress_cb)
+        cloned_items_n += merge_items(
+            dst_project_id, items, src_project_info, options, progress_cb=_progress_cb
+        )
     logger.info(f"Total cloned items: {cloned_items_n}")
 
 
@@ -3139,6 +3190,7 @@ def _maybe_save_ids_to_project_custom_data(state: Dict):
         if task_id is not None:
             dst_project_id = state[JSONKEYS.DESTINATION][JSONKEYS.PROJECT][JSONKEYS.ID]
             api.project.add_import_history(id=dst_project_id, task_id=task_id)
+
 
 # ----------------------------------------- Main Section ----------------------------------------- #
 
