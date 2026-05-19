@@ -758,7 +758,7 @@ def clone_volumes_with_annotations(
                     dst_info.id,
                     ann,
                     key_id_map,
-                    volume_info=dst_info,
+                    # volume_info=dst_info, # * some fields may be missing in dst_info 
                 )
             )
 
@@ -2065,12 +2065,20 @@ def get_item_infos(
     if project_type == str(sly.ProjectType.VIDEOS):
         if item_ids is None:
             return api.video.get_list(dataset_id)
+        elif dataset_id is None:
+            return [api.video.get_info_by_id(item_id) for item_id in item_ids]
         return api.video.get_info_by_id_batch(item_ids)
     if project_type == str(sly.ProjectType.VOLUMES):
+        if dataset_id is None:
+            return [api.volume.get_info_by_id(item_id) for item_id in item_ids]
         return api.volume.get_list(dataset_id, filters)
     if project_type == str(sly.ProjectType.POINT_CLOUDS):
+        if dataset_id is None:
+            return [api.pointcloud.get_info_by_id(item_id) for item_id in item_ids]
         return api.pointcloud.get_list(dataset_id, filters)
     if project_type == str(sly.ProjectType.POINT_CLOUD_EPISODES):
+        if dataset_id is None:
+            return [api.pointcloud_episode.get_info_by_id(item_id) for item_id in item_ids]
         return api.pointcloud_episode.get_list(dataset_id, filters)
     else:
         raise ValueError("Unknown item type")
