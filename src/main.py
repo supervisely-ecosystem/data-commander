@@ -69,6 +69,7 @@ class JSONKEYS:
     VOLUME = "volume"
     POINTCLOUD = "pointcloud"
     POINTCLOUD_EPISODE = "pointcloud_episode"
+    MESH = "mesh"
     REVIEW_STATUS = "reviewStatus"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -1124,6 +1125,116 @@ def clone_pointcloud_episodes_with_annotations(
     return [dst_infos_dict[src.id] for src in pointcloud_episode_infos]
 
 
+def clone_meshes_with_annotations(
+    mesh_infos: List[sly.MeshInfo],
+    dst_dataset_id: int,
+    project_meta: sly.ProjectMeta,
+    options,
+    progress_cb=None,
+) -> List[sly.MeshInfo]:
+    if len(mesh_infos) == 0:
+        return []
+
+    existing = run_in_executor(api.mesh.get_list, dst_dataset_id)
+    existing = {info.name: info for info in existing}
+    if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] == JSONKEYS.CONFLICT_SKIP:
+        mesh_infos = [info for info in mesh_infos if info.name not in existing]
+
+    if len(mesh_infos) == 0:
+        return []
+
+    src_dataset_id = mesh_infos[0].dataset_id
+
+    def _copy_meshes(names, ids, metas, infos):
+        # Server-side copy by reference (link/hash); no download or re-upload.
+        uploaded = api.mesh.upload_ids(
+            dst_dataset_id,
+            names=names,
+            ids=ids,
+            metas=metas,
+            infos=infos,
+        )
+        return infos, uploaded
+
+    def _copy_anns(src, dst):
+        src_ids = [info.id for info in src]
+        dst_ids = [info.id for info in dst]
+        ann_jsons = run_in_executor(
+            api.mesh.annotation.download_bulk, src_dataset_id, src_ids
+        )
+        tasks = []
+        # Mesh annotations follow the image model: server IDs are inline in the
+        # JSON, so the transfer dict can be appended directly (no KeyIdMap).
+        for ann_json, dst_id in zip(ann_jsons, dst_ids):
+            tasks.append(
+                executor.submit(api.mesh.annotation.append, dst_id, ann_json)
+            )
+        for task in as_completed(tasks):
+            task.result()
+        return src, dst
+
+    def _maybe_copy_anns_and_replace(src, dst):
+        if options[JSONKEYS.CLONE_ANNOTATIONS]:
+            src, dst = _copy_anns(src, dst)
+        return maybe_replace(src, dst, to_rename, existing)
+
+    to_rename = {}
+    copy_mesh_tasks = []
+    for src_mesh_infos in sly.batched(mesh_infos):
+        names = [info.name for info in src_mesh_infos]
+        ids = [info.id for info in src_mesh_infos]
+        metas = [info.meta for info in src_mesh_infos]
+        now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
+            JSONKEYS.CONFLICT_RENAME,
+            JSONKEYS.CONFLICT_REPLACE,
+        ]:
+            for i, name in enumerate(names):
+                if name in existing:
+                    names[i] = (
+                        ".".join(name.split(".")[:-1])
+                        + "_"
+                        + now
+                        + "."
+                        + name.split(".")[-1]
+                    )
+                    if (
+                        options[JSONKEYS.CONFLICT_RESOLUTION_MODE]
+                        == JSONKEYS.CONFLICT_REPLACE
+                    ):
+                        to_rename[names[i]] = name
+
+        copy_mesh_tasks.append(
+            executor.submit(
+                _copy_meshes,
+                names=names,
+                ids=ids,
+                metas=metas,
+                infos=src_mesh_infos,
+            )
+        )
+
+    local_executor = ThreadPoolExecutor(max_workers=5)
+    replace_tasks = []
+    src_id_to_dst_info = {}
+    for task in as_completed(copy_mesh_tasks):
+        src_mesh_infos, uploaded_mesh_infos = task.result()
+        for s, d in zip(src_mesh_infos, uploaded_mesh_infos):
+            src_id_to_dst_info[s.id] = d
+        replace_tasks.append(
+            local_executor.submit(
+                _maybe_copy_anns_and_replace, src_mesh_infos, uploaded_mesh_infos
+            )
+        )
+
+    for task in as_completed(replace_tasks):
+        src, _ = task.result()
+        if progress_cb is not None:
+            progress_cb(len(src))
+
+    return [src_id_to_dst_info[info.id] for info in mesh_infos]
+
+
 def clone_items(
     src_dataset_id,
     dst_dataset_id,
@@ -1153,6 +1264,10 @@ def clone_items(
         if src_infos is None:
             src_infos = run_in_executor(api.pointcloud_episode.get_list, src_dataset_id)
         clone_f = clone_pointcloud_episodes_with_annotations
+    elif project_type == str(sly.ProjectType.MESHES):
+        if src_infos is None:
+            src_infos = run_in_executor(api.mesh.get_list, src_dataset_id)
+        clone_f = clone_meshes_with_annotations
     else:
         raise NotImplementedError(
             "Cloning for project type {} is not implemented".format(project_type)
@@ -2080,6 +2195,10 @@ def get_item_infos(
         if dataset_id is None:
             return [api.pointcloud_episode.get_info_by_id(item_id) for item_id in item_ids]
         return api.pointcloud_episode.get_list(dataset_id, filters)
+    if project_type == str(sly.ProjectType.MESHES):
+        if dataset_id is None:
+            return [api.mesh.get_info_by_id(item_id) for item_id in item_ids]
+        return api.mesh.get_list(dataset_id, filters=filters)
     else:
         raise ValueError("Unknown item type")
 
