@@ -1146,13 +1146,12 @@ def clone_meshes_with_annotations(
     src_dataset_id = mesh_infos[0].dataset_id
 
     def _copy_meshes(names, ids, metas, infos):
-        # Server-side copy by reference (link/hash); no download or re-upload.
+        # Server-side copy by source id (image-style); no download or re-upload.
         uploaded = api.mesh.upload_ids(
             dst_dataset_id,
             names=names,
             ids=ids,
             metas=metas,
-            infos=infos,
         )
         return infos, uploaded
 
