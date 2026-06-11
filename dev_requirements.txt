@@ -2,4 +2,4 @@
 # Pinned to a commit on branch refactor/mesh-image-annotation-model (pip caches
 # branch refs and may not refetch — pin the exact commit). Swap for a pinned
 # `supervisely==<version>` once the mesh changes are released.
-supervisely @ git+https://github.com/supervisely/supervisely.git@ca91828ac6275fae2351a361a041f0dd66b485f1
+supervisely @ git+https://github.com/supervisely/supervisely.git@bfbde02112d94051a6e26a2385ba78924fb5b6f6
