@@ -43,6 +43,7 @@ Each media type handles annotations separately:
 - `clone_volumes_with_annotations()`
 - `clone_pointclouds_with_annotations()`
 - `clone_pointcloud_episodes_with_annotations()`
+- `clone_meshes_with_annotations()` — server-side copy via `api.mesh.upload_ids()`; annotations follow the image model (IDs inline, no `KeyIdMap`)
 
 ### Dataset Tree Helpers
 
@@ -102,7 +103,7 @@ modal.state.items = [{"id":123,"type":"image"}]  # optional: scope to specific i
 TASK_ID = 57919
 ```
 
-`items` type values: `image`, `video`, `volume`, `pointcloud`, `pointcloud_episode`, `dataset`, `job`, `queue`
+`items` type values: `image`, `video`, `volume`, `pointcloud`, `pointcloud_episode`, `mesh`, `dataset`, `job`, `queue`
 
 ## Docker
 

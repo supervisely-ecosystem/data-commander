@@ -1,1 +1,7 @@
-supervisely==6.73.564
+# TEMPORARY: feature support requires the unreleased SDK.
+# Pinned to a commit on branch refactor/<branch_name> (pip caches
+# branch refs and may not refetch — pin the exact commit). Swap for a pinned
+# `supervisely==<version>` once the changes are released.
+# supervisely @ git+https://github.com/supervisely/supervisely.git@ca91828ac6275fae2351a361a041f0dd66b485f1
+
+supervisely==6.74.0
