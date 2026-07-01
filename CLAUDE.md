@@ -103,7 +103,9 @@ modal.state.items = [{"id":123,"type":"image"}]  # optional: scope to specific i
 TASK_ID = 57919
 ```
 
-`items` type values: `image`, `video`, `volume`, `pointcloud`, `pointcloud_episode`, `mesh`, `dataset`, `job`, `queue`
+`items` type values: `image`, `video`, `volume`, `pointcloud`, `pointcloud_episode`, `mesh`, `dataset`, `job`, `queue`, `collection`
+
+A `collection` item (entities collection ID) is resolved via `api.entities_collection.get_items()` into a flat list of images processed by a dedicated path (`copy_collection_items_to_dataset()` / `move_collection_items_to_dataset()`) — all images land in the destination dataset without preserving source structure. Works for both `default` and `aiSearch` collection types. Same-named images from different datasets are disambiguated upfront by `disambiguate_collection_names()`: every image involved in a name conflict gets `_<src dataset ID>` appended before the extension. Conflicts with pre-existing destination images are still handled by `conflictResolutionMode`.
 
 ## Docker
 

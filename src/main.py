@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from supervisely import logger
 from supervisely._utils import generate_free_name
 from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
+from supervisely.api.entities_collection_api import CollectionType, CollectionTypeFilter
 from supervisely.api.labeling_job_api import LabelingJobInfo
 from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
 from supervisely.project.project_settings import LabelingInterface
@@ -79,6 +80,7 @@ class JSONKEYS:
     NONE = "none"
     JOB = "job"
     QUEUE = "queue"
+    COLLECTION = "collection"
     PRESERVE_SRC_STRUCTURE = "preserveStructure"
     TRANSFER_MODE = "transferMode"
     SAVE_IDS_TO_PROJECT_CUSTOM_DATA = "saveIdsToProjectCustomData"
@@ -2265,6 +2267,138 @@ def move_items_to_dataset(
     return created_item_infos
 
 
+def disambiguate_collection_names(
+    item_infos: List[sly.ImageInfo],
+) -> List[sly.ImageInfo]:
+    """Rename images whose names repeat within the flat collection list.
+
+    A collection can contain same-named images from different datasets. Every
+    image involved in a name conflict gets its source dataset ID appended to
+    the name, so the origin of each copy stays visible in the destination.
+    """
+    name_counts = defaultdict(int)
+    for info in item_infos:
+        name_counts[info.name] += 1
+    used_names = {info.name for info in item_infos}
+    result = []
+    for info in item_infos:
+        if name_counts[info.name] < 2:
+            result.append(info)
+            continue
+        if "." in info.name:
+            stem, ext = info.name.rsplit(".", 1)
+            new_name = f"{stem}_{info.dataset_id}.{ext}"
+        else:
+            new_name = f"{info.name}_{info.dataset_id}"
+        new_name = generate_free_name(
+            used_names, new_name, with_ext=True, extend_used_names=True
+        )
+        logger.info(
+            "Duplicate image name in collection, renaming",
+            extra={
+                "image_id": info.id,
+                "old_name": info.name,
+                "new_name": new_name,
+                "src_dataset_id": info.dataset_id,
+            },
+        )
+        result.append(info._replace(name=new_name))
+    return result
+
+
+def copy_collection_items_to_dataset(
+    items: List[Dict],
+    project_type: str,
+    dst_dataset_id: int,
+    project_meta: sly.ProjectMeta,
+    options: Dict,
+    progress_cb=None,
+):
+    item_ids = [item[JSONKEYS.ID] for item in items]
+    item_infos = get_item_infos(None, item_ids, project_type)
+    item_infos = disambiguate_collection_names(item_infos)
+    created_item_infos = clone_items(
+        None,
+        dst_dataset_id,
+        project_type=project_type,
+        project_meta=project_meta,
+        options=options,
+        progress_cb=progress_cb,
+        src_infos=item_infos,
+    )
+    return created_item_infos
+
+
+def move_collection_items_to_dataset(
+    items: List[Dict],
+    project_type: str,
+    dst_dataset_id: int,
+    project_meta: sly.ProjectMeta,
+    options: Dict,
+    progress_cb=None,
+):
+    global cancel_deletion
+
+    item_ids = [item[JSONKEYS.ID] for item in items]
+    item_infos = get_item_infos(None, item_ids, project_type)
+    item_infos = disambiguate_collection_names(item_infos)
+    created_item_infos = clone_items(
+        None,
+        dst_dataset_id,
+        project_type=project_type,
+        project_meta=project_meta,
+        options=options,
+        progress_cb=progress_cb,
+        src_infos=item_infos,
+    )
+    if cancel_deletion or len(created_item_infos) < len(item_infos):
+        logger.info(
+            "Some items were not moved. Skipping deletion of source items",
+            extra={"dataset_id": dst_dataset_id},
+        )
+    else:
+        delete_items(item_infos)
+    cancel_deletion = False
+    return created_item_infos
+
+
+def resolve_collection_items(
+    collection_items: List[Dict],
+) -> Tuple[List[Dict], Optional[int]]:
+    """Expand collection items into a flat list of image items.
+
+    Returns the image items and the project ID of the last resolved collection
+    (used as a fallback when the source project is not set in the state).
+    """
+    image_items = []
+    seen_image_ids = set()
+    collection_project_id = None
+    for item in collection_items:
+        collection_id = item[JSONKEYS.ID]
+        collection_info = api.entities_collection.get_info_by_id(collection_id)
+        if collection_info is None:
+            raise ValueError(f"Collection with id={collection_id} not found")
+        collection_project_id = collection_info.project_id
+        collection_type = (
+            CollectionTypeFilter.AI_SEARCH
+            if collection_info.type == CollectionType.AI_SEARCH
+            else CollectionTypeFilter.DEFAULT
+        )
+        collection_image_infos = api.entities_collection.get_items(
+            collection_id, collection_type, collection_info.project_id
+        )
+        logger.info(
+            "Resolved collection into %d images",
+            len(collection_image_infos),
+            extra={"collection_id": collection_id},
+        )
+        for info in collection_image_infos:
+            if info.id not in seen_image_ids:
+                seen_image_ids.add(info.id)
+                image_items.append({JSONKEYS.ID: info.id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
+    return image_items, collection_project_id
+
+
 def copy_or_move(state: Dict, move: bool = False):
     source = state[JSONKEYS.SOURCE]
     destination = state[JSONKEYS.DESTINATION]
@@ -2294,6 +2428,23 @@ def copy_or_move(state: Dict, move: bool = False):
     project_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.PROJECT]
     dataset_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.DATASET]
     image_items = [item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.IMAGE]
+    collection_items = [
+        item for item in items if item[JSONKEYS.TYPE] == JSONKEYS.COLLECTION
+    ]
+
+    collection_image_items = []
+    if len(collection_items) > 0:
+        collection_image_items, collection_project_id = resolve_collection_items(
+            collection_items
+        )
+        if src_project_id is None:
+            src_project_id = collection_project_id
+        explicit_image_ids = {item[JSONKEYS.ID] for item in image_items}
+        collection_image_items = [
+            item
+            for item in collection_image_items
+            if item[JSONKEYS.ID] not in explicit_image_ids
+        ]
 
     items_to_create = 0
     src_project_infos: Dict[int, sly.ProjectInfo] = {}
@@ -2323,11 +2474,11 @@ def copy_or_move(state: Dict, move: bool = False):
         items_to_create += _count_items_in_tree(datasets_tree)
         project_meta = merge_project_meta(src_project_id, dst_project_id)
 
-    if len(image_items) > 0:
+    if len(image_items) > 0 or len(collection_image_items) > 0:
         src_project_infos.setdefault(
             src_project_id, api.project.get_info_by_id(src_project_id, raise_error=True)
         )
-        items_to_create += len(image_items)
+        items_to_create += len(image_items) + len(collection_image_items)
         if project_meta is None:
             project_meta = merge_project_meta(src_project_id, dst_project_id)
 
@@ -2377,6 +2528,27 @@ def copy_or_move(state: Dict, move: bool = False):
                 dst_dataset_id=dst_dataset_id,
                 options=options,
                 progress_cb=_progress_cb,
+            )
+    if len(collection_image_items) > 0:
+        assign_workflow(src_project_id, dst_project_id)
+        project_type = src_project_infos[src_project_id].type
+        if move:
+            move_collection_items_to_dataset(
+                collection_image_items,
+                project_type,
+                dst_dataset_id,
+                project_meta,
+                options,
+                _progress_cb,
+            )
+        else:
+            copy_collection_items_to_dataset(
+                collection_image_items,
+                project_type,
+                dst_dataset_id,
+                project_meta,
+                options,
+                _progress_cb,
             )
     if len(image_items) > 0:
         assign_workflow(src_project_id, dst_project_id)
