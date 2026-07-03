@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
@@ -2362,6 +2363,38 @@ def move_collection_items_to_dataset(
     return created_item_infos
 
 
+# auto-created filter collections are named like "Filtered entities 2026-07-03T14-31-57-501Z"
+FILTERED_COLLECTION_PATTERN = re.compile(
+    r"^Filtered entities \d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z"
+)
+
+
+def rename_filtered_collection(collection_info) -> None:
+    """Rename an auto-created filter collection to reflect the task that processed it."""
+    if not FILTERED_COLLECTION_PATTERN.match(collection_info.name):
+        return
+    task_id = sly.env.task_id(raise_not_found=False)
+    if task_id is None:
+        return
+    new_name = f"Data Commander (Task {task_id})"
+    try:
+        api.entities_collection.update(collection_info.id, name=new_name)
+        logger.info(
+            "Collection renamed",
+            extra={
+                "collection_id": collection_info.id,
+                "old_name": collection_info.name,
+                "new_name": new_name,
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to rename collection: %s",
+            repr(e),
+            extra={"collection_id": collection_info.id},
+        )
+
+
 def resolve_collection_items(
     collection_items: List[Dict],
 ) -> Tuple[List[Dict], Optional[int]]:
@@ -2378,6 +2411,7 @@ def resolve_collection_items(
         collection_info = api.entities_collection.get_info_by_id(collection_id)
         if collection_info is None:
             raise ValueError(f"Collection with id={collection_id} not found")
+        rename_filtered_collection(collection_info)
         collection_project_id = collection_info.project_id
         collection_type = (
             CollectionTypeFilter.AI_SEARCH
