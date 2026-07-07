@@ -2277,6 +2277,9 @@ def disambiguate_collection_names(
     image involved in a name conflict gets its source dataset ID appended to
     the name, so the origin of each copy stays visible in the destination.
     """
+    progress = sly.Progress(
+        message="Checking for duplicate names", total_cnt=len(item_infos)
+    )
     name_counts = defaultdict(int)
     for info in item_infos:
         name_counts[info.name] += 1
@@ -2285,6 +2288,7 @@ def disambiguate_collection_names(
     for info in item_infos:
         if name_counts[info.name] < 2:
             result.append(info)
+            progress.iter_done_report()
             continue
         if "." in info.name:
             stem, ext = info.name.rsplit(".", 1)
@@ -2304,6 +2308,7 @@ def disambiguate_collection_names(
             },
         )
         result.append(info._replace(name=new_name))
+        progress.iter_done_report()
     return result
 
 
