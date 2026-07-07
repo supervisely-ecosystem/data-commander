@@ -2314,10 +2314,12 @@ def copy_collection_items_to_dataset(
     project_meta: sly.ProjectMeta,
     options: Dict,
     progress_cb=None,
+    src_infos: Optional[List[sly.ImageInfo]] = None,
 ):
-    item_ids = [item[JSONKEYS.ID] for item in items]
-    item_infos = get_item_infos(None, item_ids, project_type)
-    item_infos = disambiguate_collection_names(item_infos)
+    if src_infos is None:
+        item_ids = [item[JSONKEYS.ID] for item in items]
+        src_infos = get_item_infos(None, item_ids, project_type)
+    item_infos = disambiguate_collection_names(src_infos)
     created_item_infos = clone_items(
         None,
         dst_dataset_id,
@@ -2337,12 +2339,14 @@ def move_collection_items_to_dataset(
     project_meta: sly.ProjectMeta,
     options: Dict,
     progress_cb=None,
+    src_infos: Optional[List[sly.ImageInfo]] = None,
 ):
     global cancel_deletion
 
-    item_ids = [item[JSONKEYS.ID] for item in items]
-    item_infos = get_item_infos(None, item_ids, project_type)
-    item_infos = disambiguate_collection_names(item_infos)
+    if src_infos is None:
+        item_ids = [item[JSONKEYS.ID] for item in items]
+        src_infos = get_item_infos(None, item_ids, project_type)
+    item_infos = disambiguate_collection_names(src_infos)
     created_item_infos = clone_items(
         None,
         dst_dataset_id,
@@ -2397,14 +2401,16 @@ def rename_filtered_collection(collection_info) -> None:
 
 def resolve_collection_items(
     collection_items: List[Dict],
-) -> Tuple[List[Dict], Optional[int]]:
+) -> Tuple[List[Dict], Optional[int], Dict[int, sly.ImageInfo]]:
     """Expand collection items into a flat list of image items.
 
-    Returns the image items and the project ID of the last resolved collection
-    (used as a fallback when the source project is not set in the state).
+    Returns the image items, the project ID of the last resolved collection
+    (used as a fallback when the source project is not set in the state), and
+    the already-fetched ImageInfo per image ID — reused later to clone items
+    without fetching the same data from the API a second time.
     """
     image_items = []
-    seen_image_ids = set()
+    image_infos_by_id = {}
     collection_project_id = None
     for item in collection_items:
         collection_id = item[JSONKEYS.ID]
@@ -2418,27 +2424,19 @@ def resolve_collection_items(
             if collection_info.type == CollectionType.AI_SEARCH
             else CollectionTypeFilter.DEFAULT
         )
-        # only image IDs are needed here; the full ImageInfo is fetched again
-        # right before cloning, so avoid materializing it twice for large collections
-        list_kwargs = dict(
-            project_id=collection_info.project_id,
-            fields=[sly.api.ApiField.ID, sly.api.ApiField.NAME],
+        collection_image_infos = api.entities_collection.get_items(
+            collection_id, collection_type, collection_info.project_id
         )
-        if collection_type == CollectionTypeFilter.AI_SEARCH:
-            list_kwargs["ai_search_collection_id"] = collection_id
-        else:
-            list_kwargs["entities_collection_id"] = collection_id
-        collection_image_ids = [info.id for info in api.image.get_list(**list_kwargs)]
         logger.info(
             "Resolved collection into %d images",
-            len(collection_image_ids),
+            len(collection_image_infos),
             extra={"collection_id": collection_id},
         )
-        for image_id in collection_image_ids:
-            if image_id not in seen_image_ids:
-                seen_image_ids.add(image_id)
-                image_items.append({JSONKEYS.ID: image_id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
-    return image_items, collection_project_id
+        for info in collection_image_infos:
+            if info.id not in image_infos_by_id:
+                image_infos_by_id[info.id] = info
+                image_items.append({JSONKEYS.ID: info.id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
+    return image_items, collection_project_id, image_infos_by_id
 
 
 def copy_or_move(state: Dict, move: bool = False):
@@ -2475,9 +2473,10 @@ def copy_or_move(state: Dict, move: bool = False):
     ]
 
     collection_image_items = []
+    collection_src_infos = []
     if len(collection_items) > 0:
-        collection_image_items, collection_project_id = resolve_collection_items(
-            collection_items
+        collection_image_items, collection_project_id, collection_image_infos_by_id = (
+            resolve_collection_items(collection_items)
         )
         if src_project_id is None:
             src_project_id = collection_project_id
@@ -2486,6 +2485,12 @@ def copy_or_move(state: Dict, move: bool = False):
             item
             for item in collection_image_items
             if item[JSONKEYS.ID] not in explicit_image_ids
+        ]
+        # reuse the ImageInfo already fetched while resolving the collection
+        # instead of fetching the same images again right before cloning
+        collection_src_infos = [
+            collection_image_infos_by_id[item[JSONKEYS.ID]]
+            for item in collection_image_items
         ]
 
     items_to_create = 0
@@ -2582,6 +2587,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 project_meta,
                 options,
                 _progress_cb,
+                src_infos=collection_src_infos,
             )
         else:
             copy_collection_items_to_dataset(
@@ -2591,6 +2597,7 @@ def copy_or_move(state: Dict, move: bool = False):
                 project_meta,
                 options,
                 _progress_cb,
+                src_infos=collection_src_infos,
             )
     if len(image_items) > 0:
         assign_workflow(src_project_id, dst_project_id)
