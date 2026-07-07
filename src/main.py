@@ -2418,18 +2418,26 @@ def resolve_collection_items(
             if collection_info.type == CollectionType.AI_SEARCH
             else CollectionTypeFilter.DEFAULT
         )
-        collection_image_infos = api.entities_collection.get_items(
-            collection_id, collection_type, collection_info.project_id
+        # only image IDs are needed here; the full ImageInfo is fetched again
+        # right before cloning, so avoid materializing it twice for large collections
+        list_kwargs = dict(
+            project_id=collection_info.project_id,
+            fields=[sly.api.ApiField.ID, sly.api.ApiField.NAME],
         )
+        if collection_type == CollectionTypeFilter.AI_SEARCH:
+            list_kwargs["ai_search_collection_id"] = collection_id
+        else:
+            list_kwargs["entities_collection_id"] = collection_id
+        collection_image_ids = [info.id for info in api.image.get_list(**list_kwargs)]
         logger.info(
             "Resolved collection into %d images",
-            len(collection_image_infos),
+            len(collection_image_ids),
             extra={"collection_id": collection_id},
         )
-        for info in collection_image_infos:
-            if info.id not in seen_image_ids:
-                seen_image_ids.add(info.id)
-                image_items.append({JSONKEYS.ID: info.id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
+        for image_id in collection_image_ids:
+            if image_id not in seen_image_ids:
+                seen_image_ids.add(image_id)
+                image_items.append({JSONKEYS.ID: image_id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
     return image_items, collection_project_id
 
 
