@@ -2513,7 +2513,7 @@ def copy_or_move(state: Dict, move: bool = False):
             src_project_id, api.project.get_info_by_id(src_project_id, raise_error=True)
         )
         items_to_create += len(image_items) + len(collection_image_items)
-        if project_meta is None:
+        if project_meta is None and dst_project_id is not None:
             project_meta = merge_project_meta(src_project_id, dst_project_id)
 
     progress.total = items_to_create
@@ -2564,14 +2564,53 @@ def copy_or_move(state: Dict, move: bool = False):
                 progress_cb=_progress_cb,
             )
     if len(collection_image_items) > 0:
-        assign_workflow(src_project_id, dst_project_id)
-        project_type = src_project_infos[src_project_id].type
+        src_project_info = src_project_infos[src_project_id]
+        project_type = src_project_info.type
+        # collections are transferred as a flat list into a single dataset;
+        # create the missing destination levels when needed
+        collection_dst_project_id = dst_project_id
+        collection_dst_dataset_id = dst_dataset_id
+        if collection_dst_dataset_id is None:
+            if collection_dst_project_id is None:
+                created_project = api.project.create(
+                    dst_workspace_id,
+                    src_project_info.name,
+                    type=project_type,
+                    change_name_if_conflict=True,
+                )
+                collection_dst_project_id = created_project.id
+                logger.info(
+                    "Created project for collection items",
+                    extra={
+                        "project_id": created_project.id,
+                        "project_name": created_project.name,
+                    },
+                )
+            created_dataset = api.dataset.create(
+                collection_dst_project_id,
+                f"Collection {collection_items[0][JSONKEYS.ID]}",
+                change_name_if_conflict=True,
+            )
+            collection_dst_dataset_id = created_dataset.id
+            logger.info(
+                "Created dataset for collection items",
+                extra={
+                    "dataset_id": created_dataset.id,
+                    "dataset_name": created_dataset.name,
+                },
+            )
+        collection_project_meta = project_meta
+        if collection_project_meta is None or collection_dst_project_id != dst_project_id:
+            collection_project_meta = merge_project_meta(
+                src_project_id, collection_dst_project_id
+            )
+        assign_workflow(src_project_id, collection_dst_project_id)
         if move:
             move_collection_items_to_dataset(
                 collection_image_items,
                 project_type,
-                dst_dataset_id,
-                project_meta,
+                collection_dst_dataset_id,
+                collection_project_meta,
                 options,
                 _progress_cb,
             )
@@ -2579,8 +2618,8 @@ def copy_or_move(state: Dict, move: bool = False):
             copy_collection_items_to_dataset(
                 collection_image_items,
                 project_type,
-                dst_dataset_id,
-                project_meta,
+                collection_dst_dataset_id,
+                collection_project_meta,
                 options,
                 _progress_cb,
             )
