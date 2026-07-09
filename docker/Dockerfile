@@ -1,4 +1,4 @@
-FROM supervisely/base-py-sdk-hardened:6.74.10
+FROM supervisely/base-py-sdk-hardened:6.74.12
 
 # TEMPORARY: new feature support requires the unreleased SDK.
 # Pinned to a commit on branch refactor/<branch_name> — pip caches

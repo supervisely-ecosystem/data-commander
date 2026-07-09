@@ -595,36 +595,44 @@ def clone_videos_with_annotations(
     def _copy_anns(
         src: List[sly.api.video_api.VideoInfo], dst: List[sly.api.video_api.VideoInfo]
     ):
-
-        anns_jsons = run_in_executor(
-            api.video.annotation.download_bulk,
-            src_dataset_id,
-            [info.id for info in src],
-        )
-        dst_ids = [info.id for info in dst]
+        # collection items can come from different source datasets, and
+        # download_bulk requires all ids to belong to the same one
+        by_src_dataset = defaultdict(list)
+        for src_info, dst_info in zip(src, dst):
+            by_src_dataset[src_info.dataset_id].append((src_info, dst_info))
 
         tasks = []
-        if project_meta.labeling_interface == LabelingInterface.MULTIVIEW:
-            logger.info("Uploading multiview video annotations...")
-            anns = []
-            key_id_map = sly.KeyIdMap()
-            for ann_json in anns_jsons:
-                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
-                anns.append(ann)
-            tasks.append(
-                executor.submit(
-                    api.video.annotation.upload_anns_multiview, dst_ids, anns
-                )
+        for src_dataset_id, pairs in by_src_dataset.items():
+            src_batch = [pair[0] for pair in pairs]
+            dst_batch = [pair[1] for pair in pairs]
+            anns_jsons = run_in_executor(
+                api.video.annotation.download_bulk,
+                src_dataset_id,
+                [info.id for info in src_batch],
             )
-        else:
-            for ann_json, dst_id in zip(anns_jsons, dst_ids):
+            dst_ids = [info.id for info in dst_batch]
+
+            if project_meta.labeling_interface == LabelingInterface.MULTIVIEW:
+                logger.info("Uploading multiview video annotations...")
+                anns = []
                 key_id_map = sly.KeyIdMap()
-                ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                for ann_json in anns_jsons:
+                    ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                    anns.append(ann)
                 tasks.append(
                     executor.submit(
-                        api.video.annotation.append, dst_id, ann, key_id_map
+                        api.video.annotation.upload_anns_multiview, dst_ids, anns
                     )
                 )
+            else:
+                for ann_json, dst_id in zip(anns_jsons, dst_ids):
+                    key_id_map = sly.KeyIdMap()
+                    ann = sly.VideoAnnotation.from_json(ann_json, project_meta, key_id_map)
+                    tasks.append(
+                        executor.submit(
+                            api.video.annotation.append, dst_id, ann, key_id_map
+                        )
+                    )
         for task in as_completed(tasks):
             task.result()
         return src, dst
@@ -634,7 +642,6 @@ def clone_videos_with_annotations(
             src, dst = _copy_anns(src, dst)
         return maybe_replace(src, dst, to_rename, existing)
 
-    src_dataset_id = video_infos[0].dataset_id
     to_rename = {}
     upload_videos_tasks = []
     for src_video_infos in sly.batched(video_infos):
@@ -727,44 +734,53 @@ def clone_volumes_with_annotations(
         dst: List[sly.api.volume_api.VolumeInfo],
     ):
         global cancel_deletion
-        ann_jsons = run_in_executor(
-            api.volume.annotation.download_bulk,
-            src_dataset_id,
-            [info.id for info in src],
-        )
+        # collection items can come from different source datasets, and
+        # download_bulk requires all ids to belong to the same one
+        by_src_dataset = defaultdict(list)
+        for src_info, dst_info in zip(src, dst):
+            by_src_dataset[src_info.dataset_id].append((src_info, dst_info))
+
         tasks = []
         mask3d_tmp_dir = tempfile.mkdtemp()
         mask_ids = []
         mask_paths = []
         key_id_map = sly.KeyIdMap()
         set_csm_warning = False
-        for ann_json, dst_info in zip(ann_jsons, dst):
-            ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
-            sf_idx_to_remove = []
-            for idx, sf in enumerate(ann.spatial_figures):
-                figure_id = key_id_map.get_figure_id(sf.key())
-                if sf.geometry.name() == sly.Mask3D.name():
-                    mask_ids.append(figure_id)
-                    mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
-                if sf.geometry.name() == ClosedSurfaceMesh.name():
-                    sf_idx_to_remove.append(idx)
-                    set_csm_warning = True
-                    cancel_deletion = True
-            sf_idx_to_remove.reverse()
-            for idx in sf_idx_to_remove:
-                ann.spatial_figures.pop(idx)
-            run_in_executor(
-                api.volume.figure.download_sf_geometries, mask_ids, mask_paths
+        for src_dataset_id, pairs in by_src_dataset.items():
+            src_batch = [pair[0] for pair in pairs]
+            dst_batch = [pair[1] for pair in pairs]
+            ann_jsons = run_in_executor(
+                api.volume.annotation.download_bulk,
+                src_dataset_id,
+                [info.id for info in src_batch],
             )
-            tasks.append(
-                executor.submit(
-                    api.volume.annotation.append,
-                    dst_info.id,
-                    ann,
-                    key_id_map,
-                    # volume_info=dst_info, # * some fields may be missing in dst_info 
+            for ann_json, dst_info in zip(ann_jsons, dst_batch):
+                ann = sly.VolumeAnnotation.from_json(ann_json, project_meta, key_id_map)
+                sf_idx_to_remove = []
+                for idx, sf in enumerate(ann.spatial_figures):
+                    figure_id = key_id_map.get_figure_id(sf.key())
+                    if sf.geometry.name() == sly.Mask3D.name():
+                        mask_ids.append(figure_id)
+                        mask_paths.append(os.path.join(mask3d_tmp_dir, sf.key().hex))
+                    if sf.geometry.name() == ClosedSurfaceMesh.name():
+                        sf_idx_to_remove.append(idx)
+                        set_csm_warning = True
+                        cancel_deletion = True
+                sf_idx_to_remove.reverse()
+                for idx in sf_idx_to_remove:
+                    ann.spatial_figures.pop(idx)
+                run_in_executor(
+                    api.volume.figure.download_sf_geometries, mask_ids, mask_paths
                 )
-            )
+                tasks.append(
+                    executor.submit(
+                        api.volume.annotation.append,
+                        dst_info.id,
+                        ann,
+                        key_id_map,
+                        # volume_info=dst_info, # * some fields may be missing in dst_info
+                    )
+                )
 
         for task in as_completed(tasks):
             task.result()
@@ -791,7 +807,6 @@ def clone_volumes_with_annotations(
             src, dst = _copy_anns(src, dst)
         return maybe_replace(src, dst, to_rename, existing)
 
-    src_dataset_id = volume_infos[0].dataset_id
     to_rename = {}
     upload_volumes_tasks = []
     for src_volume_infos in sly.batched(volume_infos):
@@ -2228,11 +2243,23 @@ def copy_items_to_dataset(
     return created_item_infos
 
 
-def delete_items(item_infos: List):
+ITEM_REMOVE_BATCH_BY_PROJECT_TYPE = {
+    str(sly.ProjectType.IMAGES): lambda ids: api.image.remove_batch(ids),
+    str(sly.ProjectType.VIDEOS): lambda ids: api.video.remove_batch(ids),
+    str(sly.ProjectType.VOLUMES): lambda ids: api.volume.remove_batch(ids),
+}
+
+
+def delete_items(item_infos: List, project_type: str = str(sly.ProjectType.IMAGES)):
     if len(item_infos) == 0:
         return
     item_ids = [info.id for info in item_infos]
-    api.image.remove_batch(item_ids)
+    remove_batch = ITEM_REMOVE_BATCH_BY_PROJECT_TYPE.get(project_type)
+    if remove_batch is None:
+        raise NotImplementedError(
+            f"Deleting items of project type {project_type!r} is not implemented"
+        )
+    remove_batch(item_ids)
 
 
 def move_items_to_dataset(
@@ -2263,19 +2290,18 @@ def move_items_to_dataset(
             extra={"dataset_id": dst_dataset_id},
         )
     else:
-        delete_items(item_infos)
+        delete_items(item_infos, project_type)
     cancel_deletion = False
     return created_item_infos
 
 
-def disambiguate_collection_names(
-    item_infos: List[sly.ImageInfo],
-) -> List[sly.ImageInfo]:
-    """Rename images whose names repeat within the flat collection list.
+def disambiguate_collection_names(item_infos: List[Any]) -> List[Any]:
+    """Rename items whose names repeat within the flat collection list.
 
-    A collection can contain same-named images from different datasets. Every
-    image involved in a name conflict gets its source dataset ID appended to
-    the name, so the origin of each copy stays visible in the destination.
+    A collection can contain same-named items (image, video, or volume) from
+    different datasets. Every item involved in a name conflict gets its
+    source dataset ID appended to the name, so the origin of each copy stays
+    visible in the destination.
     """
     progress = sly.Progress(
         message="Checking for duplicate names", total_cnt=len(item_infos)
@@ -2299,9 +2325,9 @@ def disambiguate_collection_names(
             used_names, new_name, with_ext=True, extend_used_names=True
         )
         logger.info(
-            "Duplicate image name in collection, renaming",
+            "Duplicate item name in collection, renaming",
             extra={
-                "image_id": info.id,
+                "item_id": info.id,
                 "old_name": info.name,
                 "new_name": new_name,
                 "src_dataset_id": info.dataset_id,
@@ -2319,7 +2345,7 @@ def copy_collection_items_to_dataset(
     project_meta: sly.ProjectMeta,
     options: Dict,
     progress_cb=None,
-    src_infos: Optional[List[sly.ImageInfo]] = None,
+    src_infos: Optional[List[Any]] = None,
 ):
     if src_infos is None:
         item_ids = [item[JSONKEYS.ID] for item in items]
@@ -2344,7 +2370,7 @@ def move_collection_items_to_dataset(
     project_meta: sly.ProjectMeta,
     options: Dict,
     progress_cb=None,
-    src_infos: Optional[List[sly.ImageInfo]] = None,
+    src_infos: Optional[List[Any]] = None,
 ):
     global cancel_deletion
 
@@ -2367,7 +2393,7 @@ def move_collection_items_to_dataset(
             extra={"dataset_id": dst_dataset_id},
         )
     else:
-        delete_items(item_infos)
+        delete_items(item_infos, project_type)
     cancel_deletion = False
     return created_item_infos
 
@@ -2404,18 +2430,27 @@ def rename_filtered_collection(collection_info) -> None:
         )
 
 
+# entities collections only exist for these project types (server-enforced)
+COLLECTION_ITEM_TYPE_BY_PROJECT_TYPE = {
+    str(sly.ProjectType.IMAGES): JSONKEYS.IMAGE,
+    str(sly.ProjectType.VIDEOS): JSONKEYS.VIDEO,
+    str(sly.ProjectType.VOLUMES): JSONKEYS.VOLUME,
+}
+
+
 def resolve_collection_items(
     collection_items: List[Dict],
-) -> Tuple[List[Dict], Optional[int], Dict[int, sly.ImageInfo]]:
-    """Expand collection items into a flat list of image items.
+) -> Tuple[List[Dict], Optional[int], Dict[int, Any]]:
+    """Expand collection items into a flat list of items (image, video, or volume).
 
-    Returns the image items, the project ID of the last resolved collection
+    Returns the resolved items, the project ID of the last resolved collection
     (used as a fallback when the source project is not set in the state), and
-    the already-fetched ImageInfo per image ID — reused later to clone items
-    without fetching the same data from the API a second time.
+    the already-fetched info (ImageInfo/VideoInfo/VolumeInfo) per item ID —
+    reused later to clone items without fetching the same data from the API
+    a second time.
     """
-    image_items = []
-    image_infos_by_id = {}
+    resolved_items = []
+    item_infos_by_id = {}
     collection_project_id = None
     for item in collection_items:
         collection_id = item[JSONKEYS.ID]
@@ -2429,19 +2464,27 @@ def resolve_collection_items(
             if collection_info.type == CollectionType.AI_SEARCH
             else CollectionTypeFilter.DEFAULT
         )
-        collection_image_infos = api.entities_collection.get_items(
+        project_type = api.project.get_info_by_id(
+            collection_info.project_id, raise_error=True
+        ).type
+        item_type = COLLECTION_ITEM_TYPE_BY_PROJECT_TYPE.get(project_type)
+        if item_type is None:
+            raise NotImplementedError(
+                f"Collections are not supported for project type {project_type!r}"
+            )
+        collection_infos = api.entities_collection.get_items(
             collection_id, collection_type, collection_info.project_id
         )
         logger.info(
-            "Resolved collection into %d images",
-            len(collection_image_infos),
-            extra={"collection_id": collection_id},
+            "Resolved collection into %d items",
+            len(collection_infos),
+            extra={"collection_id": collection_id, "project_type": project_type},
         )
-        for info in collection_image_infos:
-            if info.id not in image_infos_by_id:
-                image_infos_by_id[info.id] = info
-                image_items.append({JSONKEYS.ID: info.id, JSONKEYS.TYPE: JSONKEYS.IMAGE})
-    return image_items, collection_project_id, image_infos_by_id
+        for info in collection_infos:
+            if info.id not in item_infos_by_id:
+                item_infos_by_id[info.id] = info
+                resolved_items.append({JSONKEYS.ID: info.id, JSONKEYS.TYPE: item_type})
+    return resolved_items, collection_project_id, item_infos_by_id
 
 
 def copy_or_move(state: Dict, move: bool = False):
