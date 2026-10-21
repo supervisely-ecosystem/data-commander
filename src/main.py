@@ -865,6 +865,18 @@ def clone_volumes_with_annotations(
     return [src_id_to_dst_info[info.id] for info in volume_infos]
 
 
+def _keep_pointcloud_objects(ann_json: Dict) -> Dict:
+    # Bulk annotation info returns every object of the dataset for each point cloud.
+    # Keep only the objects this point cloud's figures use, otherwise each copied
+    # point cloud gets its own copy of every object in the source dataset.
+    used_ids = {figure.get("objectId") for figure in ann_json.get("figures", [])}
+    if None in used_ids:
+        # a figure is linked by key rather than by id: leave the annotation as is
+        return ann_json
+    objects = [obj for obj in ann_json.get("objects", []) if obj.get("id") in used_ids]
+    return {**ann_json, "objects": objects}
+
+
 def clone_pointclouds_with_annotations(
     pointcloud_infos: List[sly.api.pointcloud_api.PointcloudInfo],
     dst_dataset_id: int,
@@ -899,6 +911,7 @@ def clone_pointclouds_with_annotations(
         )
         tasks = []
         for ann_json, dst_id in zip(ann_jsons, dst_ids):
+            ann_json = _keep_pointcloud_objects(ann_json)
             key_id_map = sly.KeyIdMap()
             ann = sly.PointcloudAnnotation.from_json(ann_json, project_meta, key_id_map)
             key_id_map = sly.KeyIdMap()
