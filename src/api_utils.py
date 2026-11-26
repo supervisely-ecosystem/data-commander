@@ -214,7 +214,8 @@ def pointclouds_copy(
 
 
 # figures.bulk.add has no limit on the number of figures; it checks the cell file of each
-# point_cloud_octree pointer with its own query, one figure after another.
+# point_cloud_octree pointer with its own query, one after another. 1000 pointers (~280 KB)
+# take about 1 s per call, so a retried call stays short and a cloud of 40k figures needs 40.
 OCTREE_FIGURES_BATCH_SIZE = 1000
 
 
@@ -248,31 +249,15 @@ def pointcloud_octree_figures_copy(
         api.post("figures.bulk.add", {ApiField.ENTITY_ID: dst_id, ApiField.FIGURES: batch})
 
 
-def pointcloud_objects(ann_json: Dict) -> List[Dict]:
-    """The objects of the point cloud in `ann_json`: those bound to it and those its figures use.
-
-    The annotation also lists every object of the dataset that is not bound to a point cloud.
-    """
-    used_ids = {figure.get(ApiField.OBJECT_ID) for figure in ann_json.get("figures", [])}
-    if None in used_ids:
-        # a figure is linked by key rather than by id: every object may be in use
-        return ann_json.get("objects", [])
-    pointcloud_id = ann_json.get(ApiField.POINTCLOUD_ID)
-    return [
-        obj
-        for obj in ann_json.get("objects", [])
-        if obj.get(ApiField.ID) in used_ids or obj.get(ApiField.ENTITY_ID) == pointcloud_id
-    ]
-
-
 POINTCLOUD_COPY_CHECKS = ("figures", "objects", "tags", "related images")
 
 
 def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[int, Dict[str, int]]:
     """Count, per point cloud of the dataset, what its copy has to reproduce (`POINTCLOUD_COPY_CHECKS`).
 
-    Figures of every geometry type, `point_cloud_octree` included; its objects
-    (`pointcloud_objects`); the tags on it and on those objects; its related images.
+    Figures of every geometry type, `point_cloud_octree` included; the point cloud's objects, i.e.
+    those bound to it and those its figures use (the annotation also lists every unbound object of
+    the dataset); the tags on it and on those objects; its related images.
     """
     contents = {}
     # point-clouds.annotations.bulk.info takes up to 100 point clouds
@@ -281,11 +266,17 @@ def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[
             "point-clouds.annotations.bulk.info", {ApiField.POINTCLOUD_IDS: batch}
         ).json()
         for ann in anns:
-            objects = pointcloud_objects(ann)
-            contents[ann[ApiField.POINTCLOUD_ID]] = {
+            pointcloud_id = ann[ApiField.POINTCLOUD_ID]
+            used_ids = {figure[ApiField.OBJECT_ID] for figure in ann["figures"]}
+            objects = [
+                obj
+                for obj in ann["objects"]
+                if obj[ApiField.ID] in used_ids or obj.get(ApiField.ENTITY_ID) == pointcloud_id
+            ]
+            contents[pointcloud_id] = {
                 "figures": len(ann["figures"]),
                 "objects": len(objects),
-                "tags": len(ann["tags"]) + sum(len(obj.get("tags", [])) for obj in objects),
+                "tags": len(ann["tags"]) + sum(len(obj["tags"]) for obj in objects),
                 "related images": 0,
             }
         for image in api.pointcloud.get_list_related_images_batch(dataset_id, batch):

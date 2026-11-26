@@ -867,10 +867,15 @@ def clone_volumes_with_annotations(
 
 
 def _keep_pointcloud_objects(ann_json: Dict) -> Dict:
-    # Bulk annotation info returns every object of the dataset that is not bound to a point
-    # cloud for each point cloud. Keep only this point cloud's own objects, otherwise each copied
-    # point cloud gets its own copy of every such object in the source dataset.
-    return {**ann_json, "objects": api_utils.pointcloud_objects(ann_json)}
+    # Bulk annotation info returns every object of the dataset for each point cloud.
+    # Keep only the objects this point cloud's figures use, otherwise each copied
+    # point cloud gets its own copy of every object in the source dataset.
+    used_ids = {figure.get("objectId") for figure in ann_json.get("figures", [])}
+    if None in used_ids:
+        # a figure is linked by key rather than by id: leave the annotation as is
+        return ann_json
+    objects = [obj for obj in ann_json.get("objects", []) if obj.get("id") in used_ids]
+    return {**ann_json, "objects": objects}
 
 
 def _split_octree_figures(ann_json: Dict) -> Tuple[Dict, List[Dict]]:

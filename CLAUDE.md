@@ -83,8 +83,7 @@ Thin wrappers around Supervisely SDK API calls adding parameters not exposed in 
 - `images_get_list()` — fetches extended fields including `created_by`, `description`
 - `pointclouds_copy()` — copies point clouds by ID (`entities.bulk.add` with `entityId`); a copy shares its source's data and octree. The copies are matched to the requested names, not to the response order
 - `pointcloud_octree_figures_copy()` — adds the `point_cloud_octree` figures of a downloaded annotation to a copy through `figures.bulk.add`, geometry as downloaded, objects mapped by `KeyIdMap` key
-- `pointcloud_objects()` — a point cloud's own objects in its annotation JSON (bound to it or used by its figures)
-- `pointclouds_contents()` / `pointclouds_copy_mismatches()` — per-cloud counts of figures, objects, tags and related images, and the differences between copies and their sources
+- `pointclouds_contents()` / `pointclouds_copy_mismatches()` — per-cloud counts of figures, objects (bound to the cloud or used by its figures), tags and related images, and the differences between copies and their sources. A cloud's object without figures is not copied, so a move of that cloud fails
 
 ### `supervisely/` Directory
 
