@@ -877,6 +877,17 @@ def _keep_pointcloud_objects(ann_json: Dict) -> Dict:
     return {**ann_json, "objects": objects}
 
 
+def _without_octree_figures(ann_json: Dict) -> Dict:
+    # The SDK has no point_cloud_octree geometry: these figures are copied by pointer
+    # (api_utils.pointcloud_octree_figures_copy) after the rest of the annotation.
+    figures = [
+        figure
+        for figure in ann_json.get("figures", [])
+        if figure.get("geometryType") != api_utils.POINT_CLOUD_OCTREE
+    ]
+    return {**ann_json, "figures": figures}
+
+
 def clone_pointclouds_with_annotations(
     pointcloud_infos: List[sly.api.pointcloud_api.PointcloudInfo],
     dst_dataset_id: int,
@@ -894,14 +905,33 @@ def clone_pointclouds_with_annotations(
     if len(pointcloud_infos) == 0:
         return []
 
-    def _copy_pointclouds(names, hashes, metas, infos):
-        uploaded = api.pointcloud.upload_hashes(
-            dataset_id=dst_dataset_id,
-            names=names,
-            hashes=hashes,
-            metas=metas,
-        )
-        return infos, uploaded
+    def _copy_pointclouds(names, infos):
+        plain = [i for i, info in enumerate(infos) if not api_utils.is_octree_pointcloud(info)]
+        octree = [i for i, info in enumerate(infos) if api_utils.is_octree_pointcloud(info)]
+        uploaded = {}
+        if len(plain) > 0:
+            plain_infos = api.pointcloud.upload_hashes(
+                dataset_id=dst_dataset_id,
+                names=[names[i] for i in plain],
+                hashes=[infos[i].hash for i in plain],
+                metas=[infos[i].meta for i in plain],
+            )
+            uploaded.update(zip(plain, plain_infos))
+        if len(octree) > 0:
+            # An octree point cloud cannot be added by hash: copy the entity, which shares its octree.
+            octree_infos = api_utils.pointclouds_copy(
+                api, dst_dataset_id, [names[i] for i in octree], [infos[i] for i in octree]
+            )
+            uploaded.update(zip(octree, octree_infos))
+        return infos, [uploaded[i] for i in range(len(infos))]
+
+    def _append_ann(src_info, dst_id, ann, src_key_id_map):
+        key_id_map = sly.KeyIdMap()
+        api.pointcloud.annotation.append(dst_id, ann, key_id_map)
+        if api_utils.is_octree_pointcloud(src_info):
+            api_utils.pointcloud_octree_figures_copy(
+                api, src_info.id, dst_id, src_key_id_map, key_id_map
+            )
 
     def _copy_anns(src, dst):
         src_ids = [info.id for info in src]
@@ -910,16 +940,11 @@ def clone_pointclouds_with_annotations(
             api.pointcloud.annotation.download_bulk, src_dataset_id, src_ids
         )
         tasks = []
-        for ann_json, dst_id in zip(ann_jsons, dst_ids):
-            ann_json = _keep_pointcloud_objects(ann_json)
+        for ann_json, src_info, dst_id in zip(ann_jsons, src, dst_ids):
+            ann_json = _without_octree_figures(_keep_pointcloud_objects(ann_json))
             key_id_map = sly.KeyIdMap()
             ann = sly.PointcloudAnnotation.from_json(ann_json, project_meta, key_id_map)
-            key_id_map = sly.KeyIdMap()
-            tasks.append(
-                executor.submit(
-                    api.pointcloud.annotation.append, dst_id, ann, key_id_map
-                )
-            )
+            tasks.append(executor.submit(_append_ann, src_info, dst_id, ann, key_id_map))
         for task in as_completed(tasks):
             task.result()
         return src, dst
@@ -934,8 +959,6 @@ def clone_pointclouds_with_annotations(
     to_rename = {}
     for src_pcd_infos in sly.batched(pointcloud_infos):
         names = [info.name for info in src_pcd_infos]
-        hashes = [info.hash for info in src_pcd_infos]
-        metas = [info.meta for info in src_pcd_infos]
         now = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         if options[JSONKEYS.CONFLICT_RESOLUTION_MODE] in [
             JSONKEYS.CONFLICT_RENAME,
@@ -957,13 +980,7 @@ def clone_pointclouds_with_annotations(
                         to_rename[names[i]] = name
 
         copy_pointcloud_tasks.append(
-            executor.submit(
-                _copy_pointclouds,
-                names=names,
-                hashes=hashes,
-                metas=metas,
-                infos=src_pcd_infos,
-            )
+            executor.submit(_copy_pointclouds, names=names, infos=src_pcd_infos)
         )
     local_executor = ThreadPoolExecutor(max_workers=5)
     replace_tasks = []

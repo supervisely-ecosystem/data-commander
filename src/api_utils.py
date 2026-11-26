@@ -3,6 +3,9 @@ from typing import Dict, List, Optional
 import pandas as pd
 import supervisely as sly
 from supervisely.api.api import ApiField
+from supervisely.api.pointcloud.pointcloud_api import PointcloudInfo
+
+POINT_CLOUD_OCTREE = "point_cloud_octree"
 
 
 def create_project(
@@ -183,3 +186,60 @@ def images_bulk_add(
         # results.append(self.InfoType(*[info_json_copy[field_name] for field_name in self.info_sequence()]))
         results.append(api.image._convert_json_info(info_json_copy))
     return results
+
+
+def is_octree_pointcloud(info: PointcloudInfo) -> bool:
+    """A streamed point cloud: an octree (`meta.octree`) rather than one file; it cannot be added by hash."""
+    return bool((info.meta or {}).get("octree"))
+
+
+def pointclouds_copy(
+    api: sly.Api, dataset_id: int, names: List[str], infos: List[PointcloudInfo]
+) -> List[PointcloudInfo]:
+    """Add copies of existing point clouds to a dataset by ID; a copy shares its source's data (and octree)."""
+    response = api.post(
+        "entities.bulk.add",
+        {
+            ApiField.DATASET_ID: dataset_id,
+            "entities": [
+                {ApiField.ENTITY_ID: info.id, ApiField.TITLE: name, ApiField.META: info.meta}
+                for name, info in zip(names, infos)
+            ],
+        },
+    )
+    ids = [entity[ApiField.ID] for entity in response.json()]
+    filters = [{ApiField.FIELD: ApiField.ID, ApiField.OPERATOR: "in", ApiField.VALUE: ids}]
+    copied = {info.id: info for info in api.pointcloud.get_list(dataset_id, filters=filters)}
+    return [copied[id] for id in ids]
+
+
+def pointcloud_octree_figures_copy(
+    api: sly.Api,
+    src_id: int,
+    dst_id: int,
+    src_key_id_map: sly.KeyIdMap,
+    dst_key_id_map: sly.KeyIdMap,
+) -> None:
+    """Add the `point_cloud_octree` figures of point cloud `src_id` to its copy `dst_id`.
+
+    The SDK has no octree geometry. A figure points at a cell file of the octree the copy shares,
+    so the copy's figures take the source pointers unchanged. An object maps from its source ID
+    to its key in `src_key_id_map`, and from the key to the copied object in `dst_key_id_map`.
+    """
+    labels = api.get("point-clouds.octree.labels.figures", {ApiField.ID: src_id}).json()
+    figures = [
+        {
+            ApiField.OBJECT_ID: dst_key_id_map.get_object_id(
+                src_key_id_map.get_object_key(figure[ApiField.OBJECT_ID])
+            ),
+            ApiField.GEOMETRY_TYPE: POINT_CLOUD_OCTREE,
+            ApiField.GEOMETRY: {
+                "version": 2,
+                "treeRevision": labels["treeRevision"],
+                "file": figure["file"],
+            },
+        }
+        for figure in labels["figures"]
+    ]
+    for batch in sly.batched(figures, batch_size=1000):
+        api.post("figures.bulk.add", {ApiField.ENTITY_ID: dst_id, ApiField.FIGURES: batch})

@@ -41,7 +41,7 @@ Each media type handles annotations separately:
 - `clone_images_with_annotations()` — batch upload via `api_utils.images_bulk_add()`
 - `clone_videos_with_annotations()`
 - `clone_volumes_with_annotations()`
-- `clone_pointclouds_with_annotations()`
+- `clone_pointclouds_with_annotations()` — ordinary clouds by hash; an octree (streamed, `meta.octree`) cloud cannot be added by hash, so it is copied by ID (`api_utils.pointclouds_copy()`) and its `point_cloud_octree` figures, which the SDK cannot parse, are added after the rest of the annotation with the source cell-file pointers (`api_utils.pointcloud_octree_figures_copy()`)
 - `clone_pointcloud_episodes_with_annotations()`
 - `clone_meshes_with_annotations()` — server-side copy via `api.mesh.upload_ids()`; annotations follow the image model (IDs inline, no `KeyIdMap`)
 
@@ -81,6 +81,8 @@ Thin wrappers around Supervisely SDK API calls adding parameters not exposed in 
 - `create_dataset()` — same date/author preservation
 - `images_bulk_add()` — bulk image upload preserving metadata, hash/link, description
 - `images_get_list()` — fetches extended fields including `created_by`, `description`
+- `pointclouds_copy()` — copies point clouds by ID (`entities.bulk.add` with `entityId`); a copy shares its source's data and octree
+- `pointcloud_octree_figures_copy()` — adds a cloud's `point_cloud_octree` figures (`point-clouds.octree.labels.figures`) to its copy through `figures.bulk.add`, mapping objects by `KeyIdMap` key
 
 ### `supervisely/` Directory
 
