@@ -1023,12 +1023,12 @@ def clone_pointclouds_with_annotations(
             src, dst = _copy_anns(src, dst)
         _copy_related_images(src, dst)
         replaced = [existing[to_rename[d.name]].id for d in dst if d.name in to_rename]
-        # listed before the point clouds are removed, as the listing hides them afterwards
+        # before the point clouds: once they are removed, their related images can be neither
+        # listed nor removed (images.bulk.remove answers 500)
         replaced_images = pointcloud_related_image_ids(dst_dataset_id, replaced) if replaced else []
-        src, dst = maybe_replace(src, dst, to_rename, existing)
         if len(replaced_images) > 0:
             api.image.remove_batch(replaced_images)
-        return src, dst
+        return maybe_replace(src, dst, to_rename, existing)
 
     def _verify_copies():
         # A move removes the source only after this; a copy only warns.
