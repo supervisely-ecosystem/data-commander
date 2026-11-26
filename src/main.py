@@ -897,7 +897,8 @@ def pointcloud_related_image_ids(dataset_id: int, pointcloud_ids: List[int]) -> 
     # names in the dataset. They are removed with it.
     return [
         image[ApiField.ID]
-        for image in api.pointcloud.get_list_related_images_batch(dataset_id, pointcloud_ids)
+        for batch in sly.batched(pointcloud_ids, batch_size=api_utils.ID_FILTER_MAX)
+        for image in api.pointcloud.get_list_related_images_batch(dataset_id, batch)
     ]
 
 

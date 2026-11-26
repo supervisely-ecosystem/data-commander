@@ -260,6 +260,10 @@ def _list_all(api: sly.Api, method: str, data: Dict, per_page: int) -> List[Dict
     )
 
 
+# An "in" filter takes at most PAGINATION_LIMIT values (500 by default).
+ID_FILTER_MAX = 500
+
+
 def _id_filter(field: str, ids: List[int]) -> List[Dict]:
     return [{ApiField.FIELD: field, ApiField.OPERATOR: "in", ApiField.VALUE: ids}]
 
@@ -297,12 +301,12 @@ def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[
         images = api.pointcloud.get_list_related_images_batch(dataset_id, batch)
         parents = {image[ApiField.ID]: image[ApiField.ENTITY_ID] for image in images}
         image_figures = Counter()
-        for image_batch in sly.batched(list(parents), batch_size=1000):
+        for image_batch in sly.batched(list(parents), batch_size=ID_FILTER_MAX):
             for figure in _figures(api, dataset_id, image_batch):
                 image_figures[parents[figure[ApiField.ENTITY_ID]]] += 1
         object_tags = {}
         object_ids = sorted(set().union(*objects.values()))
-        for object_batch in sly.batched(object_ids, batch_size=5000):
+        for object_batch in sly.batched(object_ids, batch_size=ID_FILTER_MAX):
             for obj in _list_all(
                 api,
                 "annotation-objects.list",
