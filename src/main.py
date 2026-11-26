@@ -11,11 +11,13 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from uuid import UUID
 
 import api_utils as api_utils
+import requests
 import supervisely as sly
 from dotenv import load_dotenv
 from supervisely import logger
 from supervisely._utils import generate_free_name
 from supervisely.annotation.tag_meta import TagApplicableTo, TagTargetType
+from supervisely.api.api import ApiField
 from supervisely.api.entities_collection_api import CollectionType, CollectionTypeFilter
 from supervisely.api.labeling_job_api import LabelingJobInfo
 from supervisely.geometry.closed_surface_mesh import ClosedSurfaceMesh
@@ -384,11 +386,12 @@ def maybe_replace(src: List, dst: List, to_rename: Dict, existing: Dict):
     for task in as_completed(rename_tasks):
         _, to_remove_info = task.result()
         to_remove.append(to_remove_info)
-    run_in_executor(
-        api.image.remove_batch,
-        [info.id for info in to_remove],
-        batch_size=len(to_remove),
-    )
+    if len(to_remove) > 0:
+        run_in_executor(
+            api.image.remove_batch,
+            [info.id for info in to_remove],
+            batch_size=len(to_remove),
+        )
     return src, dst
 
 
@@ -865,29 +868,6 @@ def clone_volumes_with_annotations(
     return [src_id_to_dst_info[info.id] for info in volume_infos]
 
 
-def _keep_pointcloud_objects(ann_json: Dict) -> Dict:
-    # Bulk annotation info returns every object of the dataset for each point cloud.
-    # Keep only the objects this point cloud's figures use, otherwise each copied
-    # point cloud gets its own copy of every object in the source dataset.
-    used_ids = {figure.get("objectId") for figure in ann_json.get("figures", [])}
-    if None in used_ids:
-        # a figure is linked by key rather than by id: leave the annotation as is
-        return ann_json
-    objects = [obj for obj in ann_json.get("objects", []) if obj.get("id") in used_ids]
-    return {**ann_json, "objects": objects}
-
-
-def _without_octree_figures(ann_json: Dict) -> Dict:
-    # The SDK has no point_cloud_octree geometry: these figures are copied by pointer
-    # (api_utils.pointcloud_octree_figures_copy) after the rest of the annotation.
-    figures = [
-        figure
-        for figure in ann_json.get("figures", [])
-        if figure.get("geometryType") != api_utils.POINT_CLOUD_OCTREE
-    ]
-    return {**ann_json, "figures": figures}
-
-
 def clone_pointclouds_with_annotations(
     pointcloud_infos: List[sly.api.pointcloud_api.PointcloudInfo],
     dst_dataset_id: int,
@@ -925,36 +905,147 @@ def clone_pointclouds_with_annotations(
             uploaded.update(zip(octree, octree_infos))
         return infos, [uploaded[i] for i in range(len(infos))]
 
-    def _append_ann(src_info, dst_id, ann, src_key_id_map):
-        key_id_map = sly.KeyIdMap()
-        api.pointcloud.annotation.append(dst_id, ann, key_id_map)
-        if api_utils.is_octree_pointcloud(src_info):
-            api_utils.pointcloud_octree_figures_copy(
-                api, src_info.id, dst_id, src_key_id_map, key_id_map
-            )
-
     def _copy_anns(src, dst):
-        src_ids = [info.id for info in src]
-        dst_ids = [info.id for info in dst]
-        ann_jsons = run_in_executor(
-            api.pointcloud.annotation.download_bulk, src_dataset_id, src_ids
+        copied = api_utils.pointclouds_annotations_copy(
+            api,
+            src_dataset_id,
+            dst_dataset_id,
+            dst_dataset.project_id,
+            copies={s.id: d.id for s, d in zip(src, dst)},
+            class_ids=class_ids,
+            tag_ids=tag_ids,
         )
-        tasks = []
-        for ann_json, src_info, dst_id in zip(ann_jsons, src, dst_ids):
-            ann_json = _without_octree_figures(_keep_pointcloud_objects(ann_json))
-            key_id_map = sly.KeyIdMap()
-            ann = sly.PointcloudAnnotation.from_json(ann_json, project_meta, key_id_map)
-            tasks.append(executor.submit(_append_ann, src_info, dst_id, ann, key_id_map))
-        for task in as_completed(tasks):
-            task.result()
+        with objects_lock:
+            copied_objects.update(copied)
         return src, dst
 
-    def _maybe_copy_anns_and_replace(src, dst):
+    def _add_related_images(images):
+        for batch in sly.batched(images, batch_size=100):
+            try:
+                api.pointcloud.add_related_images(batch)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code != 400 or "already exists" not in e.response.text:
+                    raise
+                # The related images of a removed point cloud stay: hidden from the listing,
+                # they keep their names. Name the rest of the batch after their point cloud.
+                attached = {
+                    (image[ApiField.ENTITY_ID], image[ApiField.NAME])
+                    for image in api.pointcloud.get_list_related_images_batch(
+                        dst_dataset_id, list({image[ApiField.ENTITY_ID] for image in batch})
+                    )
+                }
+                rest = [
+                    image
+                    for image in batch
+                    if (image[ApiField.ENTITY_ID], image[ApiField.NAME]) not in attached
+                ]
+                with related_names_lock:
+                    for image in rest:
+                        stem, ext = os.path.splitext(image[ApiField.NAME])
+                        image[ApiField.NAME] = generate_free_name(
+                            related_names, f"{stem}_{image[ApiField.ENTITY_ID]}{ext}", True, True
+                        )
+                if len(rest) > 0:
+                    logger.info(
+                        "Related image names are held by hidden images; renamed %d", len(rest)
+                    )
+                    api.pointcloud.add_related_images(rest)
+
+    def _copy_related_images(src, dst):
+        dst_ids = {s.id: d.id for s, d in zip(src, dst)}
+        images = api.pointcloud.get_list_related_images_batch(src_dataset_id, list(dst_ids))
+        if len(images) == 0:
+            return
+        # names are unique within a dataset, among point clouds and related images alike
+        with related_names_lock:
+            images = [
+                {
+                    ApiField.ENTITY_ID: dst_ids[image[ApiField.ENTITY_ID]],
+                    ApiField.NAME: generate_free_name(
+                        related_names, image[ApiField.NAME], True, True
+                    ),
+                    ApiField.IMAGE_ID: image[ApiField.ID],
+                    ApiField.META: image[ApiField.META],
+                }
+                for image in images
+            ]
+        _add_related_images(images)
+
+    def _copy_anns_and_related_images_and_replace(src, dst):
         if options[JSONKEYS.CLONE_ANNOTATIONS]:
             src, dst = _copy_anns(src, dst)
+        _copy_related_images(src, dst)
         return maybe_replace(src, dst, to_rename, existing)
 
+    def _verify_copies():
+        # A move removes the source only after this; a copy only warns.
+        moving = options.get(JSONKEYS.TRANSFER_MODE) == JSONKEYS.ACTION_MOVE
+        checks = api_utils.POINTCLOUD_COPY_CHECKS
+        if not options[JSONKEYS.CLONE_ANNOTATIONS]:
+            checks = ("related images",)
+        copies = {info.id: src_id_to_dst_info[info.id].id for info in pointcloud_infos}
+        logger.info("Verifying %d point cloud copies", len(copies), extra={"checks": checks})
+        try:
+            mismatches = api_utils.pointclouds_copy_mismatches(
+                api, src_dataset_id, dst_dataset_id, copies, checks
+            )
+        except Exception:
+            if moving:
+                raise
+            logger.warning("Could not verify the point cloud copies", exc_info=True)
+            return
+        if len(mismatches) == 0:
+            return
+        names = {info.id: info.name for info in pointcloud_infos}
+        details = [
+            f"{names[src_id]} (ID {src_id}, copy ID {copies[src_id]}): {', '.join(diff)}"
+            for src_id, diff in mismatches.items()
+        ]
+        summary = (
+            f"{len(details)} of {len(copies)} point cloud copies in dataset "
+            f"{dst_dataset.name} (ID {dst_dataset_id}) differ from their source"
+        )
+        if not moving:
+            logger.warning(summary, extra={"mismatches": details})
+            return
+        logger.error(summary, extra={"mismatches": details})
+        note = ""
+        if any(api_utils.RELATED_IMAGE_FIGURES in d for diff in mismatches.values() for d in diff):
+            note = " Figures on related images are not copied yet, so these point clouds cannot be moved."
+        raise RuntimeError(
+            f"{summary}, so the source was not removed: {'; '.join(details[:5])}.{note} "
+            'Delete those copies, or choose "Assign a new name" for conflicts, before moving again.'
+        )
+
     src_dataset_id = pointcloud_infos[0].dataset_id
+    dst_dataset = api.dataset.get_info_by_id(dst_dataset_id)
+    # objects and tags are added by the destination project's class and tag IDs, mapped by name
+    src_meta = api.project.get_meta(pointcloud_infos[0].project_id)
+    dst_meta = api.project.get_meta(dst_dataset.project_id)
+    dst_class_ids = {obj_class["title"]: obj_class["id"] for obj_class in dst_meta["classes"]}
+    dst_tag_ids = {tag_meta["name"]: tag_meta["id"] for tag_meta in dst_meta["tags"]}
+    class_ids = {
+        obj_class["id"]: dst_class_ids[obj_class["title"]]
+        for obj_class in src_meta["classes"]
+        if obj_class["title"] in dst_class_ids
+    }
+    tag_ids = {
+        tag_meta["id"]: dst_tag_ids[tag_meta["name"]]
+        for tag_meta in src_meta["tags"]
+        if tag_meta["name"] in dst_tag_ids
+    }
+    objects_lock = Lock()
+    copied_objects = set()
+    related_names_lock = Lock()
+    related_names = set(existing)
+    related_names.update(
+        image[ApiField.NAME]
+        for image in api.pointcloud.get_list_all_pages(
+            "point-clouds.images.list",
+            {ApiField.DATASET_ID: dst_dataset_id},
+            convert_json_info_cb=lambda x: x,
+        )
+    )
     copy_pointcloud_tasks = []
     to_rename = {}
     for src_pcd_infos in sly.batched(pointcloud_infos):
@@ -979,6 +1070,7 @@ def clone_pointclouds_with_annotations(
                     ):
                         to_rename[names[i]] = name
 
+        related_names.update(names)
         copy_pointcloud_tasks.append(
             executor.submit(_copy_pointclouds, names=names, infos=src_pcd_infos)
         )
@@ -991,7 +1083,7 @@ def clone_pointclouds_with_annotations(
             src_id_to_dst_info[s.id] = d
         replace_tasks.append(
             local_executor.submit(
-                _maybe_copy_anns_and_replace, src_pcd_infos, uploaded_pcd_infos
+                _copy_anns_and_related_images_and_replace, src_pcd_infos, uploaded_pcd_infos
             )
         )
 
@@ -1000,6 +1092,18 @@ def clone_pointclouds_with_annotations(
         if progress_cb is not None:
             progress_cb(len(src))
 
+    if options[JSONKEYS.CLONE_ANNOTATIONS]:
+        left_behind = api_utils.objects_count(api, src_dataset_id) - len(copied_objects)
+        if left_behind > 0:
+            # Only a copy of the whole dataset leaves objects behind for certain; a partial copy
+            # also counts the objects of the point clouds it does not copy.
+            whole = len(pointcloud_infos) == api_utils.pointclouds_count(api, src_dataset_id)
+            (logger.warning if whole else logger.info)(
+                "%d objects of the source dataset have no figures on the copied point clouds "
+                "and were not copied",
+                left_behind,
+            )
+    _verify_copies()
     return [src_id_to_dst_info[info.id] for info in pointcloud_infos]
 
 
@@ -2277,6 +2381,7 @@ ITEM_REMOVE_BATCH_BY_PROJECT_TYPE = {
     str(sly.ProjectType.IMAGES): lambda ids: api.image.remove_batch(ids),
     str(sly.ProjectType.VIDEOS): lambda ids: api.video.remove_batch(ids),
     str(sly.ProjectType.VOLUMES): lambda ids: api.volume.remove_batch(ids),
+    str(sly.ProjectType.POINT_CLOUDS): lambda ids: api.image.remove_batch(ids),
 }
 
 
@@ -2520,7 +2625,10 @@ def resolve_collection_items(
 def copy_or_move(state: Dict, move: bool = False):
     source = state[JSONKEYS.SOURCE]
     destination = state[JSONKEYS.DESTINATION]
-    options = state[JSONKEYS.OPTIONS]
+    options = {
+        **state[JSONKEYS.OPTIONS],
+        JSONKEYS.TRANSFER_MODE: JSONKEYS.ACTION_MOVE if move else JSONKEYS.ACTION_COPY,
+    }
     items = state[JSONKEYS.ITEMS]
 
     src_team_id = source[JSONKEYS.TEAM][JSONKEYS.ID]
