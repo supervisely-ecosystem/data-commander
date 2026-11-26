@@ -1,4 +1,5 @@
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -341,8 +342,10 @@ def pointclouds_copy_mismatches(
 
     Returns the differences per source ID, e.g. `["figures 21 -> 20"]`; empty when every copy matches.
     """
-    src = pointclouds_contents(api, src_dataset_id, list(copies.keys()))
-    dst = pointclouds_contents(api, dst_dataset_id, list(copies.values()))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        src_task = pool.submit(pointclouds_contents, api, src_dataset_id, list(copies.keys()))
+        dst = pointclouds_contents(api, dst_dataset_id, list(copies.values()))
+        src = src_task.result()
     mismatches = {}
     for src_id, dst_id in copies.items():
         diff = [
