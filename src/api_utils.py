@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import supervisely as sly
@@ -209,37 +209,110 @@ def pointclouds_copy(
     )
     ids = [entity[ApiField.ID] for entity in response.json()]
     filters = [{ApiField.FIELD: ApiField.ID, ApiField.OPERATOR: "in", ApiField.VALUE: ids}]
-    copied = {info.id: info for info in api.pointcloud.get_list(dataset_id, filters=filters)}
-    return [copied[id] for id in ids]
+    copied = {info.name: info for info in api.pointcloud.get_list(dataset_id, filters=filters)}
+    return [copied[name] for name in names]
+
+
+# figures.bulk.add has no limit on the number of figures; it checks the cell file of each
+# point_cloud_octree pointer with its own query, one figure after another.
+OCTREE_FIGURES_BATCH_SIZE = 1000
 
 
 def pointcloud_octree_figures_copy(
     api: sly.Api,
-    src_id: int,
     dst_id: int,
+    figures: List[Dict],
     src_key_id_map: sly.KeyIdMap,
     dst_key_id_map: sly.KeyIdMap,
 ) -> None:
-    """Add the `point_cloud_octree` figures of point cloud `src_id` to its copy `dst_id`.
+    """Add the `point_cloud_octree` figures of a downloaded source annotation to the copy `dst_id`.
 
-    The SDK has no octree geometry. A figure points at a cell file of the octree the copy shares,
-    so the copy's figures take the source pointers unchanged. An object maps from its source ID
-    to its key in `src_key_id_map`, and from the key to the copied object in `dst_key_id_map`.
+    The SDK has no octree geometry. A figure's geometry points at a cell file of the octree the copy
+    shares, so it is passed on as downloaded. An object maps from its source ID to its key in
+    `src_key_id_map`, and from the key to the copied object in `dst_key_id_map`. The annotation
+    lists the figures by priority and leaves the priority out; the server assigns it again in the
+    same order.
     """
-    labels = api.get("point-clouds.octree.labels.figures", {ApiField.ID: src_id}).json()
     figures = [
         {
             ApiField.OBJECT_ID: dst_key_id_map.get_object_id(
                 src_key_id_map.get_object_key(figure[ApiField.OBJECT_ID])
             ),
             ApiField.GEOMETRY_TYPE: POINT_CLOUD_OCTREE,
-            ApiField.GEOMETRY: {
-                "version": 2,
-                "treeRevision": labels["treeRevision"],
-                "file": figure["file"],
-            },
+            ApiField.GEOMETRY: figure[ApiField.GEOMETRY],
+            ApiField.NN_CREATED: figure.get(ApiField.NN_CREATED, False),
         }
-        for figure in labels["figures"]
+        for figure in figures
     ]
-    for batch in sly.batched(figures, batch_size=1000):
+    for batch in sly.batched(figures, batch_size=OCTREE_FIGURES_BATCH_SIZE):
         api.post("figures.bulk.add", {ApiField.ENTITY_ID: dst_id, ApiField.FIGURES: batch})
+
+
+def pointcloud_objects(ann_json: Dict) -> List[Dict]:
+    """The objects of the point cloud in `ann_json`: those bound to it and those its figures use.
+
+    The annotation also lists every object of the dataset that is not bound to a point cloud.
+    """
+    used_ids = {figure.get(ApiField.OBJECT_ID) for figure in ann_json.get("figures", [])}
+    if None in used_ids:
+        # a figure is linked by key rather than by id: every object may be in use
+        return ann_json.get("objects", [])
+    pointcloud_id = ann_json.get(ApiField.POINTCLOUD_ID)
+    return [
+        obj
+        for obj in ann_json.get("objects", [])
+        if obj.get(ApiField.ID) in used_ids or obj.get(ApiField.ENTITY_ID) == pointcloud_id
+    ]
+
+
+POINTCLOUD_COPY_CHECKS = ("figures", "objects", "tags", "related images")
+
+
+def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[int, Dict[str, int]]:
+    """Count, per point cloud of the dataset, what its copy has to reproduce (`POINTCLOUD_COPY_CHECKS`).
+
+    Figures of every geometry type, `point_cloud_octree` included; its objects
+    (`pointcloud_objects`); the tags on it and on those objects; its related images.
+    """
+    contents = {}
+    # point-clouds.annotations.bulk.info takes up to 100 point clouds
+    for batch in sly.batched(ids, batch_size=100):
+        anns = api.post(
+            "point-clouds.annotations.bulk.info", {ApiField.POINTCLOUD_IDS: batch}
+        ).json()
+        for ann in anns:
+            objects = pointcloud_objects(ann)
+            contents[ann[ApiField.POINTCLOUD_ID]] = {
+                "figures": len(ann["figures"]),
+                "objects": len(objects),
+                "tags": len(ann["tags"]) + sum(len(obj.get("tags", [])) for obj in objects),
+                "related images": 0,
+            }
+        for image in api.pointcloud.get_list_related_images_batch(dataset_id, batch):
+            contents[image[ApiField.ENTITY_ID]]["related images"] += 1
+    return contents
+
+
+def pointclouds_copy_mismatches(
+    api: sly.Api,
+    src_dataset_id: int,
+    dst_dataset_id: int,
+    copies: Dict[int, int],
+    checks: Tuple[str, ...] = POINTCLOUD_COPY_CHECKS,
+) -> Dict[int, List[str]]:
+    """Compare each copied point cloud (`copies`: source ID -> copy ID) with its source.
+
+    Returns the differences per source ID, e.g. `["figures 21 -> 20"]`; empty when every copy matches.
+    """
+    src = pointclouds_contents(api, src_dataset_id, list(copies.keys()))
+    dst = pointclouds_contents(api, dst_dataset_id, list(copies.values()))
+    mismatches = {}
+    for src_id, dst_id in copies.items():
+        diff = [
+            f"{check} {src[src_id][check]} -> {dst[dst_id][check]}"
+            for check in checks
+            if src[src_id][check] != dst[dst_id][check]
+        ]
+        if len(diff) > 0:
+            mismatches[src_id] = diff
+    return mismatches
