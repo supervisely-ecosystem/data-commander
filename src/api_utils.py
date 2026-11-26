@@ -1,3 +1,4 @@
+from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -249,38 +250,79 @@ def pointcloud_octree_figures_copy(
         api.post("figures.bulk.add", {ApiField.ENTITY_ID: dst_id, ApiField.FIGURES: batch})
 
 
-POINTCLOUD_COPY_CHECKS = ("figures", "objects", "tags", "related images")
+RELATED_IMAGE_FIGURES = "figures on related images"
+POINTCLOUD_COPY_CHECKS = ("figures", "objects", "tags", "related images", RELATED_IMAGE_FIGURES)
+
+
+def _list_all(api: sly.Api, method: str, data: Dict, per_page: int) -> List[Dict]:
+    return api.pointcloud.get_list_all_pages(
+        method, {**data, "per_page": per_page}, convert_json_info_cb=lambda x: x
+    )
+
+
+def _id_filter(field: str, ids: List[int]) -> List[Dict]:
+    return [{ApiField.FIELD: field, ApiField.OPERATOR: "in", ApiField.VALUE: ids}]
+
+
+def _figures(api: sly.Api, dataset_id: int, entity_ids: List[int]) -> List[Dict]:
+    """The figures on the entities, without geometry: `id`, `entityId`, `objectId`."""
+    return _list_all(
+        api,
+        "figures.list",
+        {
+            ApiField.DATASET_ID: dataset_id,
+            ApiField.FIELDS: [ApiField.ID, ApiField.ENTITY_ID, ApiField.OBJECT_ID],
+            ApiField.FILTER: _id_filter(ApiField.ENTITY_ID, entity_ids),
+        },
+        per_page=20000,
+    )
 
 
 def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[int, Dict[str, int]]:
     """Count, per point cloud of the dataset, what its copy has to reproduce (`POINTCLOUD_COPY_CHECKS`).
 
-    Figures of every geometry type, `point_cloud_octree` included; the point cloud's objects, i.e.
-    those bound to it and those its figures use (the annotation also lists every unbound object of
-    the dataset); the tags on it and on those objects; its related images.
+    Figures of every geometry type, `point_cloud_octree` included; the objects those figures use;
+    the tags on the point cloud and on those objects; its related images and the figures on them.
+    Everything is listed without geometry, so the requests grow with these counts only.
     """
     contents = {}
-    # point-clouds.annotations.bulk.info takes up to 100 point clouds
     for batch in sly.batched(ids, batch_size=100):
-        anns = api.post(
-            "point-clouds.annotations.bulk.info", {ApiField.POINTCLOUD_IDS: batch}
-        ).json()
-        for ann in anns:
-            pointcloud_id = ann[ApiField.POINTCLOUD_ID]
-            used_ids = {figure[ApiField.OBJECT_ID] for figure in ann["figures"]}
-            objects = [
-                obj
-                for obj in ann["objects"]
-                if obj[ApiField.ID] in used_ids or obj.get(ApiField.ENTITY_ID) == pointcloud_id
-            ]
-            contents[pointcloud_id] = {
-                "figures": len(ann["figures"]),
-                "objects": len(objects),
-                "tags": len(ann["tags"]) + sum(len(obj["tags"]) for obj in objects),
-                "related images": 0,
+        infos = api.pointcloud.get_list(dataset_id, filters=_id_filter(ApiField.ID, batch))
+        figures = Counter()
+        objects = defaultdict(set)
+        for figure in _figures(api, dataset_id, batch):
+            figures[figure[ApiField.ENTITY_ID]] += 1
+            if figure[ApiField.OBJECT_ID] is not None:
+                objects[figure[ApiField.ENTITY_ID]].add(figure[ApiField.OBJECT_ID])
+        images = api.pointcloud.get_list_related_images_batch(dataset_id, batch)
+        parents = {image[ApiField.ID]: image[ApiField.ENTITY_ID] for image in images}
+        image_figures = Counter()
+        for image_batch in sly.batched(list(parents), batch_size=1000):
+            for figure in _figures(api, dataset_id, image_batch):
+                image_figures[parents[figure[ApiField.ENTITY_ID]]] += 1
+        object_tags = {}
+        object_ids = sorted(set().union(*objects.values()))
+        for object_batch in sly.batched(object_ids, batch_size=5000):
+            for obj in _list_all(
+                api,
+                "annotation-objects.list",
+                {
+                    ApiField.DATASET_ID: dataset_id,
+                    ApiField.FIELDS: [ApiField.ID],
+                    ApiField.FILTER: _id_filter(ApiField.ID, object_batch),
+                },
+                per_page=5000,
+            ):
+                object_tags[obj[ApiField.ID]] = len(obj[ApiField.TAGS])
+        related = Counter(parents.values())
+        for info in infos:
+            contents[info.id] = {
+                "figures": figures[info.id],
+                "objects": len(objects[info.id]),
+                "tags": len(info.tags) + sum(object_tags[o] for o in objects[info.id]),
+                "related images": related[info.id],
+                RELATED_IMAGE_FIGURES: image_figures[info.id],
             }
-        for image in api.pointcloud.get_list_related_images_batch(dataset_id, batch):
-            contents[image[ApiField.ENTITY_ID]]["related images"] += 1
     return contents
 
 

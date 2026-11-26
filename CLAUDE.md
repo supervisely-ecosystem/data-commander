@@ -41,8 +41,9 @@ Each media type handles annotations separately:
 - `clone_images_with_annotations()` — batch upload via `api_utils.images_bulk_add()`
 - `clone_videos_with_annotations()`
 - `clone_volumes_with_annotations()`
-- `clone_pointclouds_with_annotations()` — ordinary clouds by hash; an octree (streamed, `meta.octree`) cloud cannot be added by hash, so it is copied by ID (`api_utils.pointclouds_copy()`) and its `point_cloud_octree` figures, which the SDK cannot parse, are added after the rest of the annotation with the downloaded cell-file pointers (`api_utils.pointcloud_octree_figures_copy()`). Related images (photo context) are copied for every cloud, by image ID, under names free in the destination dataset. On a move (`options.transferMode == "move"`, set by `copy_or_move()`), every copy is compared with its source before returning (`api_utils.pointclouds_copy_mismatches()`: figures, objects, tags, related images; related images only without `cloneAnnotations`) and a difference raises, so the source is not removed
-- `clone_pointcloud_episodes_with_annotations()`
+- `clone_pointclouds_with_annotations()` — ordinary clouds by hash; an octree (streamed, `meta.octree`) cloud cannot be added by hash, so it is copied by ID (`api_utils.pointclouds_copy()`) and its `point_cloud_octree` figures, which the SDK cannot parse, are added after the rest of the annotation with the downloaded cell-file pointers (`api_utils.pointcloud_octree_figures_copy()`). Only objects used by figures are copied; the number left behind is logged. After the annotation, related images (photo context) are copied by image ID, at most 100 per request, under names free in the destination dataset. A removed point cloud leaves its related images enabled but hidden from `point-clouds.images.list`, still holding their names: on the "already exists" 400 the rest of the batch is named `<stem>_<copy id><ext>`, and DC removes the related images of the point clouds it removes itself (Replace, item-level Move). Every copy is then compared with its source (`api_utils.pointclouds_copy_mismatches()`: figures, objects used by figures, tags, related images, figures on related images; related images only without `cloneAnnotations`). On a move (`options.transferMode == "move"`, set by `copy_or_move()`) a difference raises, so the source is not removed; on a copy it is a warning
+- Point cloud limitations: figures on related images are not copied (the annotation endpoint returns only the cloud's own figures), so such a cloud cannot be moved; object descriptions are not copied or checked (the annotation endpoint does not return them)
+- `clone_pointcloud_episodes_with_annotations()` — not verified on a move; related images only with `cloneAnnotations`
 - `clone_meshes_with_annotations()` — server-side copy via `api.mesh.upload_ids()`; annotations follow the image model (IDs inline, no `KeyIdMap`)
 
 ### Dataset Tree Helpers
@@ -83,7 +84,7 @@ Thin wrappers around Supervisely SDK API calls adding parameters not exposed in 
 - `images_get_list()` — fetches extended fields including `created_by`, `description`
 - `pointclouds_copy()` — copies point clouds by ID (`entities.bulk.add` with `entityId`); a copy shares its source's data and octree. The copies are matched to the requested names, not to the response order
 - `pointcloud_octree_figures_copy()` — adds the `point_cloud_octree` figures of a downloaded annotation to a copy through `figures.bulk.add`, geometry as downloaded, objects mapped by `KeyIdMap` key
-- `pointclouds_contents()` / `pointclouds_copy_mismatches()` — per-cloud counts of figures, objects (bound to the cloud or used by its figures), tags and related images, and the differences between copies and their sources. A cloud's object without figures is not copied, so a move of that cloud fails
+- `pointclouds_contents()` / `pointclouds_copy_mismatches()` — per-cloud counts of figures, objects used by those figures, tags, related images and figures on them, listed without geometry (`figures.list`, `annotation-objects.list`) so requests grow only with these counts; and the differences between copies and their sources
 
 ### `supervisely/` Directory
 
