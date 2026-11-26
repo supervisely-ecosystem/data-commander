@@ -868,18 +868,6 @@ def clone_volumes_with_annotations(
     return [src_id_to_dst_info[info.id] for info in volume_infos]
 
 
-def _keep_pointcloud_objects(ann_json: Dict) -> Dict:
-    # Bulk annotation info returns every object of the dataset for each point cloud.
-    # Keep only the objects this point cloud's figures use, otherwise each copied
-    # point cloud gets its own copy of every object in the source dataset.
-    used_ids = {figure.get("objectId") for figure in ann_json.get("figures", [])}
-    if None in used_ids:
-        # a figure is linked by key rather than by id: leave the annotation as is
-        return ann_json
-    objects = [obj for obj in ann_json.get("objects", []) if obj.get("id") in used_ids]
-    return {**ann_json, "objects": objects}
-
-
 def clone_pointclouds_with_annotations(
     pointcloud_infos: List[sly.api.pointcloud_api.PointcloudInfo],
     dst_dataset_id: int,
@@ -918,20 +906,18 @@ def clone_pointclouds_with_annotations(
         return infos, [uploaded[i] for i in range(len(infos))]
 
     def _copy_anns(src, dst):
-        dst_ids = {s.id: d.id for s, d in zip(src, dst)}
-        ann_jsons = run_in_executor(
-            api.pointcloud.annotation.download_bulk, src_dataset_id, list(dst_ids)
+        copied = api_utils.pointclouds_annotations_copy(
+            api,
+            src_dataset_id,
+            dst_dataset_id,
+            dst_dataset.project_id,
+            copies={s.id: d.id for s, d in zip(src, dst)},
+            cloud_tags={s.id: s.tags for s in src},
+            class_ids=class_ids,
+            tag_ids=tag_ids,
         )
-        annotations = {}
-        for ann_json in ann_jsons:
-            kept_json = _keep_pointcloud_objects(ann_json)
-            with objects_lock:
-                source_objects.update(obj["id"] for obj in ann_json.get("objects", []))
-                copied_objects.update(obj["id"] for obj in kept_json.get("objects", []))
-            annotations[dst_ids[ann_json[ApiField.POINTCLOUD_ID]]] = kept_json
-        api_utils.pointclouds_annotations_add(
-            api, dst_dataset.project_id, dst_dataset_id, class_ids, tag_ids, annotations
-        )
+        with objects_lock:
+            copied_objects.update(copied)
         return src, dst
 
     def _add_related_images(images):
@@ -1034,12 +1020,23 @@ def clone_pointclouds_with_annotations(
 
     src_dataset_id = pointcloud_infos[0].dataset_id
     dst_dataset = api.dataset.get_info_by_id(dst_dataset_id)
-    # objects and tags are added by the destination project's class and tag IDs
+    # objects and tags are added by the destination project's class and tag IDs, mapped by name
+    src_meta = api.project.get_meta(pointcloud_infos[0].project_id)
     dst_meta = api.project.get_meta(dst_dataset.project_id)
-    class_ids = {obj_class["title"]: obj_class["id"] for obj_class in dst_meta["classes"]}
-    tag_ids = {tag_meta["name"]: tag_meta["id"] for tag_meta in dst_meta["tags"]}
+    dst_class_ids = {obj_class["title"]: obj_class["id"] for obj_class in dst_meta["classes"]}
+    dst_tag_ids = {tag_meta["name"]: tag_meta["id"] for tag_meta in dst_meta["tags"]}
+    class_ids = {
+        obj_class["id"]: dst_class_ids[obj_class["title"]]
+        for obj_class in src_meta["classes"]
+        if obj_class["title"] in dst_class_ids
+    }
+    tag_ids = {
+        tag_meta["id"]: dst_tag_ids[tag_meta["name"]]
+        for tag_meta in src_meta["tags"]
+        if tag_meta["name"] in dst_tag_ids
+    }
     objects_lock = Lock()
-    source_objects, copied_objects = set(), set()
+    copied_objects = set()
     related_names_lock = Lock()
     related_names = set(existing)
     related_names.update(
@@ -1096,16 +1093,17 @@ def clone_pointclouds_with_annotations(
         if progress_cb is not None:
             progress_cb(len(src))
 
-    left_behind = len(source_objects - copied_objects)
-    if left_behind > 0:
-        # Only a copy of the whole dataset leaves objects behind for certain; a partial copy also
-        # counts the objects of the point clouds it does not copy.
-        whole = len(pointcloud_infos) == api_utils.pointclouds_count(api, src_dataset_id)
-        (logger.warning if whole else logger.info)(
-            "%d objects of the source dataset have no figures on the copied point clouds "
-            "and were not copied",
-            left_behind,
-        )
+    if options[JSONKEYS.CLONE_ANNOTATIONS]:
+        left_behind = api_utils.objects_count(api, src_dataset_id) - len(copied_objects)
+        if left_behind > 0:
+            # Only a copy of the whole dataset leaves objects behind for certain; a partial copy
+            # also counts the objects of the point clouds it does not copy.
+            whole = len(pointcloud_infos) == api_utils.pointclouds_count(api, src_dataset_id)
+            (logger.warning if whole else logger.info)(
+                "%d objects of the source dataset have no figures on the copied point clouds "
+                "and were not copied",
+                left_behind,
+            )
     _verify_copies()
     return [src_id_to_dst_info[info.id] for info in pointcloud_infos]
 

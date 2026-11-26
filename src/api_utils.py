@@ -1,12 +1,10 @@
 import math
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import supervisely as sly
-from supervisely.annotation.label import LabelJsonFields
-from supervisely.annotation.tag import TagJsonFields
 from supervisely.api.api import ApiField
 from supervisely.api.pointcloud.pointcloud_api import PointcloudInfo
 
@@ -218,10 +216,11 @@ def pointclouds_copy(
     return [copied[name] for name in names]
 
 
-# The bulk write routes take any number of items. figures.bulk.add checks the cell file of each
-# point_cloud_octree pointer with its own query, one after another: 1000 pointers (~280 KB) take
-# about 1 s per call, so a retried call stays short and a cloud of 40k figures needs 40.
-WRITE_BATCH_SIZE = 1000
+# The bulk write routes take any number of rows (the API's body limit is 128 MB by default), and
+# each request costs ~0.4 s on top of the server's time (the SDK opens a connection per request),
+# so batches are large. figures.bulk.add checks the cell file of each point_cloud_octree pointer
+# with its own query, one after another: 5000 pointers (~1.7 MB) take about 5 s per call.
+WRITE_BATCH_SIZE = 5000
 # Index figures of an ordinary point cloud file; their indices are uploaded separately.
 POINT_CLOUD_INDICES = "point_cloud"
 
@@ -232,97 +231,6 @@ def _post_batched(api: sly.Api, method: str, data: Dict, field: str, items: List
     for batch in sly.batched(items, batch_size=WRITE_BATCH_SIZE):
         created += api.post(method, {**data, field: batch}).json()
     return created
-
-
-def pointclouds_annotations_add(
-    api: sly.Api,
-    project_id: int,
-    dataset_id: int,
-    class_ids: Dict[str, int],
-    tag_ids: Dict[str, int],
-    annotations: Dict[int, Dict],
-) -> None:
-    """Add downloaded point cloud annotations (copy ID -> annotation JSON) to the copies in a
-    dataset, a few calls per 1000 objects, tags or figures for all the copies together.
-
-    Classes and tags map by name to the destination project's (`class_ids`, `tag_ids`). Each copy
-    gets its own copy of every object of its annotation (`annotation-objects.bulk.add` returns the
-    objects in the order given), then the tags of those objects and of the point cloud, then the
-    figures in the annotation's order: `point_cloud_octree` pointers as downloaded (the copy shares
-    the octree), index figures without geometry and their indices uploaded after them, the rest
-    as is. The annotation lists the figures by priority and leaves the priority out; the server
-    assigns it again in the same order.
-    """
-    keys, objects = [], []
-    for dst_id, ann in annotations.items():
-        for obj in ann.get("objects", []):
-            keys.append((dst_id, obj[ApiField.ID]))
-            objects.append({ApiField.CLASS_ID: class_ids[obj[LabelJsonFields.OBJ_CLASS_NAME]]})
-    created = _post_batched(
-        api,
-        "annotation-objects.bulk.add",
-        {ApiField.DATASET_ID: dataset_id},
-        ApiField.ANNOTATION_OBJECTS,
-        objects,
-    )
-    object_ids = {key: obj[ApiField.ID] for key, obj in zip(keys, created)}
-
-    def _tag(tag: Dict, field: str, target_id: int) -> Dict:
-        return {
-            ApiField.TAG_ID: tag_ids[tag[TagJsonFields.TAG_NAME]],
-            field: target_id,
-            ApiField.VALUE: tag.get(TagJsonFields.VALUE),
-        }
-
-    object_tags = [
-        _tag(tag, ApiField.OBJECT_ID, object_ids[(dst_id, obj[ApiField.ID])])
-        for dst_id, ann in annotations.items()
-        for obj in ann.get("objects", [])
-        for tag in obj.get(ApiField.TAGS, [])
-    ]
-    _post_batched(
-        api,
-        "annotation-objects.tags.bulk.add",
-        {ApiField.PROJECT_ID: project_id},
-        ApiField.TAGS,
-        object_tags,
-    )
-    entity_tags = [
-        _tag(tag, ApiField.ENTITY_ID, dst_id)
-        for dst_id, ann in annotations.items()
-        for tag in ann.get(ApiField.TAGS, [])
-    ]
-    _post_batched(
-        api, "tags.entities.bulk.add", {ApiField.PROJECT_ID: project_id}, ApiField.TAGS, entity_tags
-    )
-
-    figures, indices = [], {}
-    for dst_id, ann in annotations.items():
-        for figure in ann.get("figures", []):
-            data = {
-                ApiField.ENTITY_ID: dst_id,
-                ApiField.OBJECT_ID: object_ids[(dst_id, figure[ApiField.OBJECT_ID])],
-                ApiField.GEOMETRY_TYPE: figure[ApiField.GEOMETRY_TYPE],
-                ApiField.NN_CREATED: figure.get(ApiField.NN_CREATED, False),
-            }
-            if figure[ApiField.GEOMETRY_TYPE] == POINT_CLOUD_INDICES:
-                indices[len(figures)] = figure[ApiField.GEOMETRY]["indices"]
-            else:
-                data[ApiField.GEOMETRY] = figure[ApiField.GEOMETRY]
-            figures.append(data)
-    created = _post_batched(
-        api, "figures.bulk.add", {ApiField.DATASET_ID: dataset_id}, ApiField.FIGURES, figures
-    )
-    if len(indices) > 0:
-        api.pointcloud.figure.upload_indices_batch(
-            [created[i][ApiField.ID] for i in indices], list(indices.values())
-        )
-
-
-def pointclouds_count(api: sly.Api, dataset_id: int) -> int:
-    """The number of point clouds in the dataset, its child datasets not included."""
-    response = api.post("point-clouds.list", {ApiField.DATASET_ID: dataset_id, "per_page": 1})
-    return response.json()["total"]
 
 
 RELATED_IMAGE_FIGURES = "figures on related images"
@@ -343,42 +251,195 @@ def _id_filter(field: str, ids: List[int]) -> List[Dict]:
     return [{ApiField.FIELD: field, ApiField.OPERATOR: "in", ApiField.VALUE: ids}]
 
 
-def _figures(api: sly.Api, dataset_id: int, entity_ids: List[int]) -> List[Dict]:
-    """The figures on the entities, without geometry: `id`, `entityId`, `objectId`."""
-    return _list_all(
-        api,
-        "figures.list",
-        {
-            ApiField.DATASET_ID: dataset_id,
-            ApiField.FIELDS: [ApiField.ID, ApiField.ENTITY_ID, ApiField.OBJECT_ID],
-            ApiField.FILTER: _id_filter(ApiField.ENTITY_ID, entity_ids),
-        },
-        per_page=20000,
+def _figures(
+    api: sly.Api,
+    dataset_id: int,
+    entity_ids: List[int],
+    fields: Tuple[str, ...] = (ApiField.ID, ApiField.ENTITY_ID, ApiField.OBJECT_ID),
+) -> List[Dict]:
+    """The figures on the entities, without geometry unless `fields` has it."""
+    return [
+        figure
+        for batch in sly.batched(entity_ids, batch_size=ID_FILTER_MAX)
+        for figure in _list_all(
+            api,
+            "figures.list",
+            {
+                ApiField.DATASET_ID: dataset_id,
+                ApiField.FIELDS: list(fields),
+                ApiField.FILTER: _id_filter(ApiField.ENTITY_ID, batch),
+            },
+            per_page=20000,
+        )
+    ]
+
+
+def _count(api: sly.Api, method: str, dataset_id: int) -> int:
+    # recursive by default for objects: the dataset's route would also count its child datasets'
+    data = {ApiField.DATASET_ID: dataset_id, ApiField.FIELDS: [ApiField.ID], "recursive": False}
+    return api.post(method, {**data, "per_page": 1}).json()["total"]
+
+
+def objects_count(api: sly.Api, dataset_id: int) -> int:
+    """The number of objects in the dataset, its child datasets not included."""
+    return _count(api, "annotation-objects.list", dataset_id)
+
+
+def pointclouds_count(api: sly.Api, dataset_id: int) -> int:
+    """The number of point clouds in the dataset, its child datasets not included."""
+    return _count(api, "point-clouds.list", dataset_id)
+
+
+def _objects(api: sly.Api, dataset_id: int, object_ids: List[int]) -> List[Dict]:
+    """The dataset's objects with these IDs (`id`, `classId`, `tags`): listed by ID, 500 per
+    request, or the dataset's objects 5000 per page when that takes fewer requests."""
+    if len(object_ids) == 0:
+        return []
+    data = {
+        ApiField.DATASET_ID: dataset_id,
+        ApiField.FIELDS: [ApiField.ID, ApiField.CLASS_ID],
+        "recursive": False,
+    }
+    if math.ceil(len(object_ids) / ID_FILTER_MAX) > math.ceil(objects_count(api, dataset_id) / 5000):
+        wanted = set(object_ids)
+        return [
+            obj
+            for obj in _list_all(api, "annotation-objects.list", data, per_page=5000)
+            if obj[ApiField.ID] in wanted
+        ]
+    return [
+        obj
+        for batch in sly.batched(object_ids, batch_size=ID_FILTER_MAX)
+        for obj in _list_all(
+            api,
+            "annotation-objects.list",
+            {**data, ApiField.FILTER: _id_filter(ApiField.ID, batch)},
+            per_page=5000,
+        )
+    ]
+
+
+def pointclouds_annotations_copy(
+    api: sly.Api,
+    src_dataset_id: int,
+    dst_dataset_id: int,
+    dst_project_id: int,
+    copies: Dict[int, int],
+    cloud_tags: Dict[int, List[Dict]],
+    class_ids: Dict[int, int],
+    tag_ids: Dict[int, int],
+) -> Set[int]:
+    """Copy the annotations of point clouds (`copies`: source ID -> copy ID) to their copies in
+    another dataset; return the IDs of the source objects copied.
+
+    Read: the figures with geometry (`figures.list`; a `point_cloud_octree` geometry is a pointer
+    to a cell file of the octree the copy shares, the indices of an index figure are downloaded
+    apart), the objects they use with their tags (`annotation-objects.list`), and the point clouds'
+    tags (`cloud_tags`: source ID -> tags of its listing). Not `point-clouds.annotations.bulk.info`:
+    it repeats in each annotation every object of the dataset that is not bound to a point cloud
+    (the SDK and the labeling tool bind none), 306 MB for 50 clouds of a dataset of 30,000 objects.
+
+    Write, one call per `WRITE_BATCH_SIZE` rows for all the copies together: each copy gets its own
+    copy of every object its figures use (`annotation-objects.bulk.add` returns the objects in the
+    order given), then the tags of those objects and of the point cloud, then the figures by
+    priority, which the server assigns again in the same order; index figures without geometry
+    and their indices after them. Classes and tags map to the destination project's by ID
+    (`class_ids`, `tag_ids`: source ID -> destination ID).
+    """
+    fields = (
+        ApiField.ID,
+        ApiField.ENTITY_ID,
+        ApiField.OBJECT_ID,
+        ApiField.CLASS_ID,
+        ApiField.GEOMETRY_TYPE,
+        ApiField.GEOMETRY,
+        ApiField.NN_CREATED,
+        ApiField.PRIORITY,
     )
+    figures = defaultdict(list)
+    for figure in sorted(
+        _figures(api, src_dataset_id, list(copies), fields),
+        key=lambda f: (f[ApiField.PRIORITY] is None, f[ApiField.PRIORITY] or 0, f[ApiField.ID]),
+    ):
+        figures[figure[ApiField.ENTITY_ID]].append(figure)
+    used = {f[ApiField.OBJECT_ID] for fs in figures.values() for f in fs} - {None}
+    objects = {obj[ApiField.ID]: obj for obj in _objects(api, src_dataset_id, sorted(used))}
+    index_ids = [
+        f[ApiField.ID]
+        for fs in figures.values()
+        for f in fs
+        if f[ApiField.GEOMETRY_TYPE] == POINT_CLOUD_INDICES
+    ]
+    indices = {}
+    if len(index_ids) > 0:
+        indices = dict(zip(index_ids, api.pointcloud.figure.download_indices_batch(index_ids)))
+
+    keys = []  # (copy ID, source object ID), in the order the objects are added
+    for src_id, dst_id in copies.items():
+        cloud_objects = dict.fromkeys(f[ApiField.OBJECT_ID] for f in figures[src_id])
+        keys += [(dst_id, obj_id) for obj_id in cloud_objects if obj_id is not None]
+    created = _post_batched(
+        api,
+        "annotation-objects.bulk.add",
+        {ApiField.DATASET_ID: dst_dataset_id},
+        ApiField.ANNOTATION_OBJECTS,
+        [{ApiField.CLASS_ID: class_ids[objects[obj_id][ApiField.CLASS_ID]]} for _, obj_id in keys],
+    )
+    object_ids = {key: obj[ApiField.ID] for key, obj in zip(keys, created)}
+
+    def _tag(tag: Dict, field: str, target_id: int) -> Dict:
+        return {
+            ApiField.TAG_ID: tag_ids[tag[ApiField.TAG_ID]],
+            field: target_id,
+            ApiField.VALUE: tag.get(ApiField.VALUE),
+        }
+
+    tags_data = {ApiField.PROJECT_ID: dst_project_id}
+    object_tags = [
+        _tag(tag, ApiField.OBJECT_ID, new_id)
+        for (_, obj_id), new_id in object_ids.items()
+        for tag in objects[obj_id][ApiField.TAGS]
+    ]
+    _post_batched(api, "annotation-objects.tags.bulk.add", tags_data, ApiField.TAGS, object_tags)
+    entity_tags = [
+        _tag(tag, ApiField.ENTITY_ID, dst_id)
+        for src_id, dst_id in copies.items()
+        for tag in cloud_tags.get(src_id) or []
+    ]
+    _post_batched(api, "tags.entities.bulk.add", tags_data, ApiField.TAGS, entity_tags)
+
+    rows, index_rows = [], {}
+    for src_id, dst_id in copies.items():
+        for figure in figures[src_id]:
+            row = {
+                ApiField.ENTITY_ID: dst_id,
+                ApiField.GEOMETRY_TYPE: figure[ApiField.GEOMETRY_TYPE],
+                ApiField.NN_CREATED: bool(figure.get(ApiField.NN_CREATED)),
+            }
+            if figure[ApiField.OBJECT_ID] is None:
+                row[ApiField.CLASS_ID] = class_ids[figure[ApiField.CLASS_ID]]
+            else:
+                row[ApiField.OBJECT_ID] = object_ids[(dst_id, figure[ApiField.OBJECT_ID])]
+            if figure[ApiField.GEOMETRY_TYPE] == POINT_CLOUD_INDICES:
+                index_rows[len(rows)] = indices[figure[ApiField.ID]]
+            else:
+                row[ApiField.GEOMETRY] = figure[ApiField.GEOMETRY]
+            rows.append(row)
+    created = _post_batched(
+        api, "figures.bulk.add", {ApiField.DATASET_ID: dst_dataset_id}, ApiField.FIGURES, rows
+    )
+    if len(index_rows) > 0:
+        api.pointcloud.figure.upload_indices_batch(
+            [created[i][ApiField.ID] for i in index_rows], list(index_rows.values())
+        )
+    return set(objects)
 
 
 def _object_tag_counts(api: sly.Api, dataset_id: int, object_ids: List[int]) -> Dict[int, int]:
-    """Tags per object: listed by ID, 500 per request, or the dataset's objects 5000 per page
-    when that takes fewer requests."""
-    if len(object_ids) == 0:
-        return {}
-    # recursive by default: without this the dataset's route also lists its child datasets' objects
-    data = {ApiField.DATASET_ID: dataset_id, ApiField.FIELDS: [ApiField.ID], "recursive": False}
-    total = api.post("annotation-objects.list", {**data, "per_page": 1}).json()["total"]
-    if math.ceil(len(object_ids) / ID_FILTER_MAX) > math.ceil(total / 5000):
-        objects = _list_all(api, "annotation-objects.list", data, per_page=5000)
-    else:
-        objects = [
-            obj
-            for batch in sly.batched(object_ids, batch_size=ID_FILTER_MAX)
-            for obj in _list_all(
-                api,
-                "annotation-objects.list",
-                {**data, ApiField.FILTER: _id_filter(ApiField.ID, batch)},
-                per_page=5000,
-            )
-        ]
-    return {obj[ApiField.ID]: len(obj[ApiField.TAGS]) for obj in objects}
+    """Tags per object."""
+    return {
+        obj[ApiField.ID]: len(obj[ApiField.TAGS]) for obj in _objects(api, dataset_id, object_ids)
+    }
 
 
 def pointclouds_contents(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[int, Dict[str, int]]:
