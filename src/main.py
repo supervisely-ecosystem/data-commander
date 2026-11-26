@@ -912,7 +912,6 @@ def clone_pointclouds_with_annotations(
             dst_dataset_id,
             dst_dataset.project_id,
             copies={s.id: d.id for s, d in zip(src, dst)},
-            cloud_tags={s.id: s.tags for s in src},
             class_ids=class_ids,
             tag_ids=tag_ids,
         )

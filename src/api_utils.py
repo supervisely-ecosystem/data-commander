@@ -8,8 +8,6 @@ import supervisely as sly
 from supervisely.api.api import ApiField
 from supervisely.api.pointcloud.pointcloud_api import PointcloudInfo
 
-POINT_CLOUD_OCTREE = "point_cloud_octree"
-
 
 def create_project(
     api: sly.Api,
@@ -223,6 +221,9 @@ def pointclouds_copy(
 WRITE_BATCH_SIZE = 5000
 # Index figures of an ordinary point cloud file; their indices are uploaded separately.
 POINT_CLOUD_INDICES = "point_cloud"
+# Other geometry the server keeps in a file of its own: figures.bulk.add ignores a posted geometry
+# of these types and figures.list returns only the file's path, so a copy would be empty.
+UNSUPPORTED_GEOMETRY_TYPES = ("mask_3d", "mesh", "closed_surface_mesh", "alpha_mask")
 
 
 def _post_batched(api: sly.Api, method: str, data: Dict, field: str, items: List[Dict]) -> List[Dict]:
@@ -319,13 +320,37 @@ def _objects(api: sly.Api, dataset_id: int, object_ids: List[int]) -> List[Dict]
     ]
 
 
+def _cloud_tags(api: sly.Api, dataset_id: int, ids: List[int]) -> Dict[int, List[Dict]]:
+    """The tags of the point clouds with their `customData` and `meta`, which `point-clouds.list`
+    leaves out."""
+    return {
+        entity[ApiField.ID]: entity[ApiField.TAGS]
+        for batch in sly.batched(ids, batch_size=ID_FILTER_MAX)
+        for entity in _list_all(
+            api,
+            "entities.list",
+            {
+                ApiField.DATASET_ID: dataset_id,
+                ApiField.FIELDS: [ApiField.ID, ApiField.TAGS],
+                ApiField.FILTER: _id_filter(ApiField.ID, batch),
+            },
+            per_page=ID_FILTER_MAX,
+        )
+    }
+
+
+def _require(found, wanted, message: str) -> None:
+    missing = sorted(set(wanted) - set(found))
+    if len(missing) > 0:
+        raise RuntimeError(f"{message}: {', '.join(map(str, missing[:10]))}")
+
+
 def pointclouds_annotations_copy(
     api: sly.Api,
     src_dataset_id: int,
     dst_dataset_id: int,
     dst_project_id: int,
     copies: Dict[int, int],
-    cloud_tags: Dict[int, List[Dict]],
     class_ids: Dict[int, int],
     tag_ids: Dict[int, int],
 ) -> Set[int]:
@@ -333,18 +358,20 @@ def pointclouds_annotations_copy(
     another dataset; return the IDs of the source objects copied.
 
     Read: the figures with geometry (`figures.list`; a `point_cloud_octree` geometry is a pointer
-    to a cell file of the octree the copy shares, the indices of an index figure are downloaded
-    apart), the objects they use with their tags (`annotation-objects.list`), and the point clouds'
-    tags (`cloud_tags`: source ID -> tags of its listing). Not `point-clouds.annotations.bulk.info`:
-    it repeats in each annotation every object of the dataset that is not bound to a point cloud
-    (the SDK and the labeling tool bind none), 306 MB for 50 clouds of a dataset of 30,000 objects.
+    to a cell file of the octree the copy shares; an index figure holds its indices, written before
+    platform 6.16.20, or a stored file downloaded apart), the objects they use with their tags
+    (`annotation-objects.list`), and the point clouds' tags (`entities.list`). Not
+    `point-clouds.annotations.bulk.info`: it repeats in each annotation every object of the dataset
+    that is not bound to a point cloud (the SDK and the labeling tool bind none), 306 MB for 50
+    clouds of a dataset of 30,000 objects.
 
     Write, one call per `WRITE_BATCH_SIZE` rows for all the copies together: each copy gets its own
     copy of every object its figures use (`annotation-objects.bulk.add` returns the objects in the
     order given), then the tags of those objects and of the point cloud, then the figures by
     priority, which the server assigns again in the same order; index figures without geometry
-    and their indices after them. Classes and tags map to the destination project's by ID
-    (`class_ids`, `tag_ids`: source ID -> destination ID).
+    and their indices uploaded after them. Classes and tags map to the destination project's by
+    ID (`class_ids`, `tag_ids`: source ID -> destination ID). Everything is checked before the
+    first write.
     """
     fields = (
         ApiField.ID,
@@ -355,6 +382,7 @@ def pointclouds_annotations_copy(
         ApiField.GEOMETRY,
         ApiField.NN_CREATED,
         ApiField.PRIORITY,
+        ApiField.TRACK_ID,
     )
     figures = defaultdict(list)
     for figure in sorted(
@@ -362,17 +390,42 @@ def pointclouds_annotations_copy(
         key=lambda f: (f[ApiField.PRIORITY] is None, f[ApiField.PRIORITY] or 0, f[ApiField.ID]),
     ):
         figures[figure[ApiField.ENTITY_ID]].append(figure)
-    used = {f[ApiField.OBJECT_ID] for fs in figures.values() for f in fs} - {None}
+    all_figures = [f for fs in figures.values() for f in fs]
+    _require(
+        set(),
+        {
+            f"{f[ApiField.GEOMETRY_TYPE]} (point cloud {f[ApiField.ENTITY_ID]})"
+            for f in all_figures
+            if f[ApiField.GEOMETRY_TYPE] in UNSUPPORTED_GEOMETRY_TYPES
+        },
+        "Figures of these types cannot be copied yet",
+    )
+    used = {f[ApiField.OBJECT_ID] for f in all_figures} - {None}
     objects = {obj[ApiField.ID]: obj for obj in _objects(api, src_dataset_id, sorted(used))}
-    index_ids = [
-        f[ApiField.ID]
-        for fs in figures.values()
-        for f in fs
-        if f[ApiField.GEOMETRY_TYPE] == POINT_CLOUD_INDICES
-    ]
-    indices = {}
-    if len(index_ids) > 0:
-        indices = dict(zip(index_ids, api.pointcloud.figure.download_indices_batch(index_ids)))
+    _require(objects, used, f"Objects of the figures not found in dataset {src_dataset_id}")
+    cloud_tags = _cloud_tags(api, src_dataset_id, list(copies))
+    _require(
+        class_ids,
+        {obj[ApiField.CLASS_ID] for obj in objects.values()}
+        | {f[ApiField.CLASS_ID] for f in all_figures if f[ApiField.OBJECT_ID] is None},
+        "Source classes with no class of the same name in the destination project (IDs)",
+    )
+    _require(
+        tag_ids,
+        {tag[ApiField.TAG_ID] for obj in objects.values() for tag in obj[ApiField.TAGS]}
+        | {tag[ApiField.TAG_ID] for tags in cloud_tags.values() for tag in tags},
+        "Source tags with no tag of the same name in the destination project (IDs)",
+    )
+    indices, stored = {}, []
+    for f in all_figures:
+        if f[ApiField.GEOMETRY_TYPE] == POINT_CLOUD_INDICES:
+            inline = (f[ApiField.GEOMETRY] or {}).get("indices")
+            if isinstance(inline, list):
+                indices[f[ApiField.ID]] = inline
+            else:
+                stored.append(f[ApiField.ID])
+    if len(stored) > 0:
+        indices.update(zip(stored, api.pointcloud.figure.download_indices_batch(stored)))
 
     keys = []  # (copy ID, source object ID), in the order the objects are added
     for src_id, dst_id in copies.items():
@@ -387,24 +440,26 @@ def pointclouds_annotations_copy(
     )
     object_ids = {key: obj[ApiField.ID] for key, obj in zip(keys, created)}
 
-    def _tag(tag: Dict, field: str, target_id: int) -> Dict:
-        return {
+    def _tag(tag: Dict, field: str, target_id: int, extra: Tuple[str, ...]) -> Dict:
+        row = {
             ApiField.TAG_ID: tag_ids[tag[ApiField.TAG_ID]],
             field: target_id,
             ApiField.VALUE: tag.get(ApiField.VALUE),
         }
+        row.update({key: tag[key] for key in extra if tag.get(key)})
+        return row
 
     tags_data = {ApiField.PROJECT_ID: dst_project_id}
     object_tags = [
-        _tag(tag, ApiField.OBJECT_ID, new_id)
+        _tag(tag, ApiField.OBJECT_ID, new_id, (ApiField.CUSTOM_DATA,))
         for (_, obj_id), new_id in object_ids.items()
         for tag in objects[obj_id][ApiField.TAGS]
     ]
     _post_batched(api, "annotation-objects.tags.bulk.add", tags_data, ApiField.TAGS, object_tags)
     entity_tags = [
-        _tag(tag, ApiField.ENTITY_ID, dst_id)
+        _tag(tag, ApiField.ENTITY_ID, dst_id, (ApiField.CUSTOM_DATA, ApiField.META))
         for src_id, dst_id in copies.items()
-        for tag in cloud_tags.get(src_id) or []
+        for tag in cloud_tags.get(src_id, [])
     ]
     _post_batched(api, "tags.entities.bulk.add", tags_data, ApiField.TAGS, entity_tags)
 
@@ -416,6 +471,8 @@ def pointclouds_annotations_copy(
                 ApiField.GEOMETRY_TYPE: figure[ApiField.GEOMETRY_TYPE],
                 ApiField.NN_CREATED: bool(figure.get(ApiField.NN_CREATED)),
             }
+            if figure.get(ApiField.TRACK_ID) is not None:
+                row[ApiField.TRACK_ID] = figure[ApiField.TRACK_ID]
             if figure[ApiField.OBJECT_ID] is None:
                 row[ApiField.CLASS_ID] = class_ids[figure[ApiField.CLASS_ID]]
             else:
